@@ -55,7 +55,13 @@ artifacts-monorepo/
 │   │   ├── consensus_orchestrator.py  # Agent 12: Weighted vote aggregation
 │   │   └── db_logger.py              # PostgreSQL persistence helpers
 │   ├── execution/          # Paper + live trade executors
+│   │   ├── paper_executor.py    # Simulated fills with slippage, P&L tracking
+│   │   ├── kite_executor.py     # Zerodha Kite Connect live execution
+│   │   └── position_tracker.py  # SL/target/EOD monitoring + exit triggers
 │   └── api/                # FastAPI routes + WebSocket
+│       ├── server.py            # FastAPI app factory
+│       ├── routes.py            # REST endpoints (dashboard, trades, signals, etc.)
+│       └── websocket_handler.py # WS server + Redis relay for live updates
 ├── lib/                    # Shared libraries
 │   ├── api-spec/           # OpenAPI spec + Orval codegen config
 │   ├── api-client-react/   # Generated React Query hooks
@@ -132,6 +138,17 @@ Analysis Signals (1-7) → Consensus Orchestrator (12) → Decision Agents (8-10
 - Consensus weights per trade type: SCALP emphasizes order flow (0.35) + options (0.25), INTRADAY balanced across all 7, BTST emphasizes macro (0.25) + sentiment (0.25)
 - Risk Manager checks: daily loss limit, open position count, VIX halt, correlation risk, capital-at-risk, volatility-adjusted position sizing
 - All votes and decisions persisted to PostgreSQL via db_logger.py (agent_votes, trade_log, audit_logs tables)
+
+### Execution Engine
+- **Paper Executor** (`paper_executor.py`): Subscribes to `trade_executions` channel, handles RISK_APPROVED events by simulating fills with 0.05% slippage. Tracks open positions, computes P&L on exit. Persists all trades via `upsert_trade` and `log_trade_event`.
+- **Kite Executor** (`kite_executor.py`): Live execution via Zerodha Kite Connect. Places MARKET orders on NFO exchange, enforces lot sizes (NIFTY=50, BANKNIFTY=15), resolves weekly expiry trading symbols. Only active in `TRADING_MODE=live`.
+- **Position Tracker** (`position_tracker.py`): Monitors open positions every 2 seconds. Checks exit conditions: SL hit, target hit, EOD square-off (15:15 IST for scalp/intraday). Triggers EXIT_ORDER events on the `trade_executions` channel.
+
+### FastAPI Server
+- Runs on port 8000 alongside the agent pipeline
+- REST endpoints at `/api/`: dashboard, trades, trade detail, signals, agents, news, settings, audit, healthz
+- WebSocket at `/ws`: streams ticks, trade executions, agent status, signals, news in real-time
+- Settings endpoint supports paper/live mode toggle with PIN verification for live mode
 
 ### Configuration (config.py)
 All config loaded from environment variables:

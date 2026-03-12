@@ -69,9 +69,12 @@ class RiskManager(BaseAgent):
                 "status": "OPEN",
             })
 
-        elif event in ("EXIT", "SL_HIT", "TARGET_HIT"):
+        elif event in ("EXIT", "SL_HIT", "TARGET_HIT", "EOD_CLOSE", "MANUAL"):
             pnl = float(data.get("pnl", 0))
             self._daily_pnl += pnl
+            self._open_positions = [p for p in self._open_positions if p.get("trade_id") != trade_id]
+
+        elif event == "ORDER_FAILED":
             self._open_positions = [p for p in self._open_positions if p.get("trade_id") != trade_id]
 
     async def _validate_proposal(self, data: dict) -> Signal | None:

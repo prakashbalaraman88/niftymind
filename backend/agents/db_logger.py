@@ -143,10 +143,16 @@ def upsert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
                  entry_price: float | None = None,
                  sl_price: float | None = None,
                  target_price: float | None = None,
+                 exit_price: float | None = None,
+                 pnl: float | None = None,
+                 exit_reason: str | None = None,
+                 entry_time: str | None = None,
+                 exit_time: str | None = None,
                  status: str = "PROPOSED"):
     """Insert or update a trade row. On trade_id conflict, updates status, quantity,
-    consensus_score, and updated_at. Used by RiskManager to record final verdicts
-    regardless of whether ConsensusOrchestrator already created a placeholder row."""
+    consensus_score, lifecycle fields (entry_price, sl_price, target_price, exit_price,
+    pnl, exit_reason, entry_time, exit_time), and updated_at. Used by RiskManager to
+    record final verdicts and by executors to persist full trade lifecycle."""
     conn = _get_conn()
     if not conn:
         return
@@ -154,17 +160,27 @@ def upsert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
         cur = conn.cursor()
         cur.execute(
             """INSERT INTO trades (id, trade_id, symbol, underlying, direction,
-               entry_price, sl_price, target_price, quantity, status,
-               consensus_score, trade_type, created_at, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               entry_price, sl_price, target_price, exit_price, quantity, status,
+               pnl, exit_reason, consensus_score, trade_type,
+               entry_time, exit_time, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (trade_id) DO UPDATE SET
                  status = EXCLUDED.status,
                  quantity = EXCLUDED.quantity,
-                 consensus_score = EXCLUDED.consensus_score,
+                 consensus_score = CASE WHEN EXCLUDED.consensus_score > 0 THEN EXCLUDED.consensus_score ELSE trades.consensus_score END,
+                 entry_price = COALESCE(EXCLUDED.entry_price, trades.entry_price),
+                 sl_price = COALESCE(EXCLUDED.sl_price, trades.sl_price),
+                 target_price = COALESCE(EXCLUDED.target_price, trades.target_price),
+                 exit_price = COALESCE(EXCLUDED.exit_price, trades.exit_price),
+                 pnl = COALESCE(EXCLUDED.pnl, trades.pnl),
+                 exit_reason = COALESCE(EXCLUDED.exit_reason, trades.exit_reason),
+                 entry_time = COALESCE(EXCLUDED.entry_time, trades.entry_time),
+                 exit_time = COALESCE(EXCLUDED.exit_time, trades.exit_time),
                  updated_at = EXCLUDED.updated_at""",
             (str(uuid.uuid4()), trade_id, symbol, underlying, direction,
-             entry_price, sl_price, target_price, quantity, status,
-             consensus_score, trade_type, datetime.now(IST), datetime.now(IST)),
+             entry_price, sl_price, target_price, exit_price, quantity, status,
+             pnl, exit_reason, consensus_score, trade_type,
+             entry_time, exit_time, datetime.now(IST), datetime.now(IST)),
         )
         conn.commit()
     except Exception as e:

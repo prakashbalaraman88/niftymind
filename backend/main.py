@@ -47,6 +47,13 @@ async def main():
     from agents.risk_manager import RiskManager
     from agents.consensus_orchestrator import ConsensusOrchestrator
 
+    from execution.paper_executor import PaperExecutor
+    from execution.kite_executor import KiteExecutor
+    from execution.position_tracker import PositionTracker
+
+    from api.server import create_app
+    from api.websocket_handler import start_redis_relay
+
     publisher = RedisPublisher(config.redis)
     await publisher.connect()
 
@@ -55,6 +62,22 @@ async def main():
     sentiment_feed = SentimentFeed(publisher)
     news_feed = NewsFeed(publisher)
     macro_feed = GlobalMacroFeed(publisher)
+
+    if config.trading.mode == "live":
+        executor = KiteExecutor(publisher, config.zerodha)
+        logger.info("Using LIVE executor (Kite Connect)")
+    else:
+        executor = PaperExecutor(publisher)
+        logger.info("Using PAPER executor")
+
+    position_tracker = PositionTracker(publisher, executor)
+
+    fastapi_app = create_app(
+        executor=executor,
+        position_tracker=position_tracker,
+        redis_publisher=publisher,
+        config=config,
+    )
 
     tasks = [
         asyncio.create_task(tick_feed.start(config.trading.instruments, shutdown_event)),
@@ -90,10 +113,32 @@ async def main():
     tasks.append(asyncio.create_task(risk_mgr.start(shutdown_event)))
     logger.info(f"Started control agent: {risk_mgr.agent_name}")
 
-    logger.info("All 12 agents and data pipeline started")
+    tasks.append(asyncio.create_task(executor.start(shutdown_event)))
+    logger.info(f"Started executor: {config.trading.mode}")
+
+    tasks.append(asyncio.create_task(position_tracker.start(shutdown_event)))
+    logger.info("Started position tracker")
+
+    tasks.append(asyncio.create_task(start_redis_relay(publisher, shutdown_event)))
+    logger.info("Started WebSocket Redis relay")
+
+    import uvicorn
+    uvicorn_config = uvicorn.Config(
+        fastapi_app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="info",
+    )
+    server = uvicorn.Server(uvicorn_config)
+
+    tasks.append(asyncio.create_task(server.serve()))
+    logger.info("FastAPI server starting on port 8000")
+
+    logger.info("All 12 agents, execution engine, and API server started")
     await shutdown_event.wait()
 
     logger.info("Shutting down...")
+    server.should_exit = True
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)

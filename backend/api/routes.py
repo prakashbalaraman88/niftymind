@@ -1,0 +1,415 @@
+import logging
+import os
+from datetime import datetime, timezone, timedelta
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+
+from api.server import get_app_state
+
+logger = logging.getLogger("niftymind.api.routes")
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+router = APIRouter()
+
+
+def _db_conn():
+    import psycopg2
+    url = os.getenv("DATABASE_URL", "")
+    if not url:
+        return None
+    try:
+        return psycopg2.connect(url)
+    except Exception:
+        return None
+
+
+class SettingsUpdate(BaseModel):
+    trading_mode: str | None = None
+    live_pin: str | None = None
+    capital: float | None = None
+    max_daily_loss: float | None = None
+    max_trade_risk_pct: float | None = None
+    max_open_positions: int | None = None
+    consensus_threshold: float | None = None
+
+
+@router.get("/dashboard")
+async def get_dashboard():
+    state = get_app_state()
+    executor = state.get("executor")
+    tracker = state.get("position_tracker")
+    config = state.get("config")
+
+    executor_stats = executor.get_stats() if executor else {"mode": "unknown"}
+    open_positions = executor.get_open_positions() if executor else []
+    tracker_summary = tracker.get_summary() if tracker else {"tracked_positions": 0, "total_unrealized_pnl": 0}
+
+    return {
+        "timestamp": datetime.now(IST).isoformat(),
+        "trading_mode": config.trading.mode if config else "paper",
+        "executor": executor_stats,
+        "positions": {
+            "open": open_positions,
+            "tracker": tracker_summary,
+        },
+        "capital": config.risk.capital if config else 500000,
+        "risk_limits": {
+            "max_daily_loss": config.risk.max_daily_loss if config else 50000,
+            "max_trade_risk_pct": config.risk.max_trade_risk_pct if config else 2.0,
+            "max_open_positions": config.risk.max_open_positions if config else 5,
+            "vix_halt_threshold": config.risk.vix_halt_threshold if config else 25.0,
+        },
+    }
+
+
+@router.get("/trades")
+async def get_trades(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    status: str | None = Query(None),
+    trade_type: str | None = Query(None),
+):
+    conn = _db_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    try:
+        cur = conn.cursor()
+        query = "SELECT trade_id, symbol, underlying, direction, entry_price, sl_price, target_price, exit_price, quantity, status, pnl, exit_reason, consensus_score, trade_type, entry_time, exit_time, created_at, updated_at FROM trades"
+        conditions = []
+        params = []
+
+        if status:
+            conditions.append("status = %s")
+            params.append(status)
+        if trade_type:
+            conditions.append("trade_type = %s")
+            params.append(trade_type)
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
+
+        cur.execute(query, params)
+        columns = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+
+        trades = []
+        for row in rows:
+            trade = dict(zip(columns, row))
+            for k, v in trade.items():
+                if isinstance(v, datetime):
+                    trade[k] = v.isoformat()
+            trades.append(trade)
+
+        cur.execute("SELECT COUNT(*) FROM trades" + (" WHERE " + " AND ".join(conditions[:len(conditions)]) if conditions else ""), params[:len(conditions)] if conditions else [])
+        total = cur.fetchone()[0]
+
+        return {"trades": trades, "total": total, "limit": limit, "offset": offset}
+    except Exception as e:
+        logger.error(f"Failed to fetch trades: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch trades")
+    finally:
+        conn.close()
+
+
+@router.get("/trades/{trade_id}")
+async def get_trade_detail(trade_id: str):
+    conn = _db_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT trade_id, symbol, underlying, direction, entry_price, sl_price, target_price, exit_price, quantity, status, pnl, exit_reason, consensus_score, trade_type, entry_time, exit_time, created_at, updated_at FROM trades WHERE trade_id = %s",
+            (trade_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Trade not found")
+
+        columns = [desc[0] for desc in cur.description]
+        trade = dict(zip(columns, row))
+        for k, v in trade.items():
+            if isinstance(v, datetime):
+                trade[k] = v.isoformat()
+
+        cur.execute(
+            "SELECT agent_id, direction, confidence, weight, weighted_score, reasoning, supporting_data, voted_at FROM agent_votes WHERE trade_id = %s ORDER BY voted_at",
+            (trade_id,),
+        )
+        vote_cols = [desc[0] for desc in cur.description]
+        votes = []
+        for vrow in cur.fetchall():
+            vote = dict(zip(vote_cols, vrow))
+            for k, v in vote.items():
+                if isinstance(v, datetime):
+                    vote[k] = v.isoformat()
+            votes.append(vote)
+
+        cur.execute(
+            "SELECT event, status, price, quantity, pnl, agent_votes, consensus_score, risk_approval, risk_reasoning, details, timestamp FROM trade_log WHERE trade_id = %s ORDER BY timestamp",
+            (trade_id,),
+        )
+        log_cols = [desc[0] for desc in cur.description]
+        log_entries = []
+        for lrow in cur.fetchall():
+            entry = dict(zip(log_cols, lrow))
+            for k, v in entry.items():
+                if isinstance(v, datetime):
+                    entry[k] = v.isoformat()
+            log_entries.append(entry)
+
+        return {
+            "trade": trade,
+            "agent_votes": votes,
+            "trade_log": log_entries,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch trade detail: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch trade detail")
+    finally:
+        conn.close()
+
+
+@router.get("/agents")
+async def get_agent_status():
+    conn = _db_conn()
+    if not conn:
+        return {"agents": []}
+
+    try:
+        import json
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT DISTINCT ON (source) source, event_type, message, details, timestamp
+               FROM audit_logs
+               WHERE source LIKE 'agent_%%'
+               ORDER BY source, timestamp DESC"""
+        )
+        columns = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+
+        agents = []
+        for row in rows:
+            agent = dict(zip(columns, row))
+            for k, v in agent.items():
+                if isinstance(v, datetime):
+                    agent[k] = v.isoformat()
+            agents.append(agent)
+
+        return {"agents": agents}
+    except Exception as e:
+        logger.error(f"Failed to fetch agent status: {e}")
+        return {"agents": []}
+    finally:
+        conn.close()
+
+
+@router.get("/signals")
+async def get_signals(
+    limit: int = Query(50, ge=1, le=500),
+    agent_id: str | None = Query(None),
+    underlying: str | None = Query(None),
+):
+    conn = _db_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    try:
+        cur = conn.cursor()
+        query = "SELECT id, agent_id, timestamp, underlying, direction, confidence, timeframe, reasoning, supporting_data, created_at FROM signals"
+        conditions = []
+        params = []
+
+        if agent_id:
+            conditions.append("agent_id = %s")
+            params.append(agent_id)
+        if underlying:
+            conditions.append("underlying = %s")
+            params.append(underlying)
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        query += " ORDER BY created_at DESC LIMIT %s"
+        params.append(limit)
+
+        cur.execute(query, params)
+        columns = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+
+        signals = []
+        for row in rows:
+            sig = dict(zip(columns, row))
+            for k, v in sig.items():
+                if isinstance(v, datetime):
+                    sig[k] = v.isoformat()
+            signals.append(sig)
+
+        return {"signals": signals}
+    except Exception as e:
+        logger.error(f"Failed to fetch signals: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch signals")
+    finally:
+        conn.close()
+
+
+@router.get("/news")
+async def get_news(limit: int = Query(20, ge=1, le=100)):
+    conn = _db_conn()
+    if not conn:
+        return {"news": []}
+
+    try:
+        import json
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT id, event_type, source, message, details, timestamp
+               FROM audit_logs
+               WHERE event_type IN ('NEWS_CLASSIFIED', 'NEWS_SIGNAL', 'NEWS_ANALYSIS')
+               ORDER BY timestamp DESC LIMIT %s""",
+            (limit,),
+        )
+        columns = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+
+        news = []
+        for row in rows:
+            item = dict(zip(columns, row))
+            for k, v in item.items():
+                if isinstance(v, datetime):
+                    item[k] = v.isoformat()
+            news.append(item)
+
+        return {"news": news}
+    except Exception as e:
+        logger.error(f"Failed to fetch news: {e}")
+        return {"news": []}
+    finally:
+        conn.close()
+
+
+@router.get("/settings")
+async def get_settings():
+    state = get_app_state()
+    config = state.get("config")
+
+    if not config:
+        return {"error": "Config not loaded"}
+
+    return {
+        "trading_mode": config.trading.mode,
+        "instruments": config.trading.instruments,
+        "capital": config.risk.capital,
+        "max_daily_loss": config.risk.max_daily_loss,
+        "max_trade_risk_pct": config.risk.max_trade_risk_pct,
+        "max_open_positions": config.risk.max_open_positions,
+        "vix_halt_threshold": config.risk.vix_halt_threshold,
+        "consensus_threshold": config.trading.consensus_threshold,
+    }
+
+
+@router.post("/settings")
+async def update_settings(update: SettingsUpdate):
+    state = get_app_state()
+    config = state.get("config")
+
+    if not config:
+        raise HTTPException(status_code=503, detail="Config not loaded")
+
+    if update.trading_mode == "live":
+        if not update.live_pin:
+            raise HTTPException(status_code=400, detail="Live mode requires PIN confirmation")
+        if update.live_pin != config.trading.live_pin:
+            raise HTTPException(status_code=403, detail="Invalid live trading PIN")
+
+    applied = {}
+
+    if update.trading_mode and update.trading_mode in ("paper", "live"):
+        os.environ["TRADING_MODE"] = update.trading_mode
+        applied["trading_mode"] = update.trading_mode
+
+    if update.capital is not None and update.capital > 0:
+        os.environ["TRADING_CAPITAL"] = str(update.capital)
+        applied["capital"] = update.capital
+
+    if update.max_daily_loss is not None and update.max_daily_loss > 0:
+        os.environ["MAX_DAILY_LOSS"] = str(update.max_daily_loss)
+        applied["max_daily_loss"] = update.max_daily_loss
+
+    if update.max_trade_risk_pct is not None and update.max_trade_risk_pct > 0:
+        os.environ["MAX_TRADE_RISK_PCT"] = str(update.max_trade_risk_pct)
+        applied["max_trade_risk_pct"] = update.max_trade_risk_pct
+
+    if update.max_open_positions is not None and update.max_open_positions > 0:
+        os.environ["MAX_OPEN_POSITIONS"] = str(update.max_open_positions)
+        applied["max_open_positions"] = update.max_open_positions
+
+    if update.consensus_threshold is not None and 0 < update.consensus_threshold <= 1:
+        os.environ["CONSENSUS_THRESHOLD"] = str(update.consensus_threshold)
+        applied["consensus_threshold"] = update.consensus_threshold
+
+    return {"status": "updated", "applied": applied}
+
+
+@router.get("/audit")
+async def get_audit_log(
+    limit: int = Query(50, ge=1, le=500),
+    event_type: str | None = Query(None),
+    trade_id: str | None = Query(None),
+):
+    conn = _db_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    try:
+        cur = conn.cursor()
+        query = "SELECT id, event_type, source, trade_id, agent_id, message, details, timestamp FROM audit_logs"
+        conditions = []
+        params = []
+
+        if event_type:
+            conditions.append("event_type = %s")
+            params.append(event_type)
+        if trade_id:
+            conditions.append("trade_id = %s")
+            params.append(trade_id)
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        query += " ORDER BY timestamp DESC LIMIT %s"
+        params.append(limit)
+
+        cur.execute(query, params)
+        columns = [desc[0] for desc in cur.description]
+        rows = cur.fetchall()
+
+        entries = []
+        for row in rows:
+            entry = dict(zip(columns, row))
+            for k, v in entry.items():
+                if isinstance(v, datetime):
+                    entry[k] = v.isoformat()
+            entries.append(entry)
+
+        return {"audit_logs": entries}
+    except Exception as e:
+        logger.error(f"Failed to fetch audit log: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch audit log")
+    finally:
+        conn.close()
+
+
+@router.get("/healthz")
+async def health_check():
+    return {"status": "ok", "timestamp": datetime.now(IST).isoformat()}
