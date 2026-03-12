@@ -203,6 +203,11 @@ class PositionTracker:
         if not pos:
             return
 
+        if pos.get("exit_pending"):
+            return
+
+        pos["exit_pending"] = True
+
         logger.info(
             f"Exit triggered: {trade_id} reason={exit_reason} "
             f"price=₹{current_price:,.2f} PnL=₹{pnl:,.2f}"
@@ -235,8 +240,6 @@ class PositionTracker:
             "trigger_price": current_price,
             "timestamp": datetime.now(IST).isoformat(),
         })
-
-        del self._positions[trade_id]
 
     def get_tracked_positions(self) -> list[dict]:
         result = []
