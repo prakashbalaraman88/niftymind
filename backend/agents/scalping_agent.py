@@ -36,10 +36,10 @@ class ScalpingDecisionAgent(BaseAgent):
         self._latest_signals[agent_id] = data
         self._expire_stale_signals()
 
-        if len(self._latest_signals) < 2:
+        if len(self._latest_signals) < 3:
             return None
 
-        return self._evaluate_scalp()
+        return await self._evaluate_scalp()
 
     def _expire_stale_signals(self):
         now = datetime.now(IST)
@@ -54,12 +54,16 @@ class ScalpingDecisionAgent(BaseAgent):
         for aid in expired:
             del self._latest_signals[aid]
 
-    def _evaluate_scalp(self) -> Signal | None:
+    async def _evaluate_scalp(self) -> Signal | None:
         now = datetime.now(IST)
         if self._last_proposal_time and (now - self._last_proposal_time).total_seconds() < self._cooldown_seconds:
             return None
 
         signals = self._latest_signals
+        required_agents = {"agent_1_options_chain", "agent_2_order_flow", "agent_3_volume_profile"}
+        if not required_agents.issubset(signals.keys()):
+            return None
+
         directions = {}
         confidences = {}
         for aid, sig in signals.items():
@@ -68,9 +72,9 @@ class ScalpingDecisionAgent(BaseAgent):
             directions[aid] = d
             confidences[aid] = c
 
+        total = len(directions)
         bullish_count = sum(1 for d in directions.values() if d == "BULLISH")
         bearish_count = sum(1 for d in directions.values() if d == "BEARISH")
-        total = len(directions)
 
         if bullish_count == total:
             consensus_dir = "BULLISH"
@@ -111,13 +115,14 @@ class ScalpingDecisionAgent(BaseAgent):
 
         self._last_proposal_time = now
 
-        proposal = self.create_signal(
-            underlying=underlying,
-            direction=consensus_dir,
-            confidence=confidence,
-            timeframe="SCALP",
-            reasoning=f"Scalp entry: All {total} fast agents aligned {consensus_dir}. " + "; ".join(reasoning_parts) + expiry_boost,
-            supporting_data={
+        proposal = {
+            "agent_id": self.agent_id,
+            "underlying": underlying,
+            "direction": consensus_dir,
+            "confidence": confidence,
+            "timeframe": "SCALP",
+            "reasoning": f"Scalp entry: All 3 fast agents aligned {consensus_dir}. " + "; ".join(reasoning_parts) + expiry_boost,
+            "supporting_data": {
                 "trade_id": trade_id,
                 "trade_type": "SCALP",
                 "option_type": option_type,
@@ -128,5 +133,8 @@ class ScalpingDecisionAgent(BaseAgent):
                 "agent_signals": {aid: {"direction": sig.get("direction"), "confidence": sig.get("confidence")} for aid, sig in signals.items()},
                 "is_expiry_day": self.is_expiry_day(),
             },
-        )
-        return proposal
+        }
+
+        await self.publisher.publish_trade_proposal(proposal)
+        self.logger.info(f"Scalp proposal published to trade_proposals: {trade_id} {consensus_dir} {underlying}")
+        return None

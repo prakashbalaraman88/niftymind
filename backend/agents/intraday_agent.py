@@ -147,13 +147,14 @@ Based on these signals, should we take an intraday options trade? Respond with J
         lot_size = BANKNIFTY_LOT_SIZE if underlying == "BANKNIFTY" else NIFTY_LOT_SIZE
         trade_id = f"INTRA-{underlying}-{uuid.uuid4().hex[:8]}"
 
-        return self.create_signal(
-            underlying=underlying,
-            direction=direction,
-            confidence=confidence,
-            timeframe="INTRADAY",
-            reasoning=result.get("reasoning", "Intraday trade proposal"),
-            supporting_data={
+        proposal = {
+            "agent_id": self.agent_id,
+            "underlying": underlying,
+            "direction": direction,
+            "confidence": confidence,
+            "timeframe": "INTRADAY",
+            "reasoning": result.get("reasoning", "Intraday trade proposal"),
+            "supporting_data": {
                 "trade_id": trade_id,
                 "trade_type": "INTRADAY",
                 "option_type": option_type,
@@ -167,4 +168,8 @@ Based on these signals, should we take an intraday options trade? Respond with J
                 "agent_signals": {aid: {"direction": sig.get("direction"), "confidence": sig.get("confidence")} for aid, sig in self._latest_signals.items()},
                 "is_expiry_day": self.is_expiry_day(),
             },
-        )
+        }
+
+        await self.publisher.publish_trade_proposal(proposal)
+        self.logger.info(f"Intraday proposal published to trade_proposals: {trade_id} {direction} {underlying}")
+        return None

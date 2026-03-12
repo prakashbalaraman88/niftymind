@@ -100,10 +100,9 @@ class ConsensusOrchestrator(BaseAgent):
 
         self._last_consensus[trade_type] = now
 
-        trade_id = f"CONSENSUS-{trade_type}-{uuid.uuid4().hex[:8]}"
-        self._log_votes_to_db(trade_id, trade_type, vote_details)
-
         underlying = self._determine_underlying()
+        trade_id = f"CONSENSUS-{trade_type}-{uuid.uuid4().hex[:8]}"
+        self._log_votes_to_db(trade_id, trade_type, vote_details, underlying, direction, abs(score))
 
         return self.create_signal(
             underlying=underlying,
@@ -184,8 +183,19 @@ class ConsensusOrchestrator(BaseAgent):
         for aid in expired:
             del self._latest_signals[aid]
 
-    def _log_votes_to_db(self, trade_id: str, trade_type: str, vote_details: list[dict]):
+    def _log_votes_to_db(self, trade_id: str, trade_type: str, vote_details: list[dict],
+                         underlying: str, direction: str, consensus_score: float):
         try:
+            db_logger.insert_trade(
+                trade_id=trade_id,
+                symbol=f"{underlying} CONSENSUS",
+                underlying=underlying,
+                direction=direction,
+                quantity=0,
+                trade_type=trade_type,
+                consensus_score=consensus_score,
+            )
+
             for vote in vote_details:
                 db_logger.log_agent_vote(
                     trade_id=trade_id,
@@ -197,6 +207,7 @@ class ConsensusOrchestrator(BaseAgent):
                     reasoning=vote["reasoning"],
                     supporting_data={"trade_type": trade_type},
                 )
+
             db_logger.log_audit(
                 event_type="CONSENSUS_REACHED",
                 source=self.agent_id,
@@ -206,6 +217,7 @@ class ConsensusOrchestrator(BaseAgent):
                 details={
                     "trade_type": trade_type,
                     "vote_count": len(vote_details),
+                    "consensus_score": consensus_score,
                     "votes_summary": [{v["agent_id"]: v["weighted_score"]} for v in vote_details],
                 },
             )

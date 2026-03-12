@@ -66,6 +66,9 @@ class BTSTDecisionAgent(BaseAgent):
         return BTST_WINDOW_START <= now <= BTST_WINDOW_END
 
     async def process_message(self, channel: str, data: dict) -> Signal | None:
+        if not self.should_run():
+            return None
+
         agent_id = data.get("agent_id", "")
         if not agent_id.startswith("agent_"):
             return None
@@ -76,6 +79,7 @@ class BTSTDecisionAgent(BaseAgent):
 
         data["_received_at"] = datetime.now(IST).isoformat()
         self._latest_signals[agent_id] = data
+        self._expire_stale_signals()
 
         today = datetime.now(IST).strftime("%Y-%m-%d")
         if self._last_eval_date != today:
@@ -89,6 +93,19 @@ class BTSTDecisionAgent(BaseAgent):
             return None
 
         return await self._evaluate_btst()
+
+    def _expire_stale_signals(self):
+        now = datetime.now(IST)
+        expired = []
+        for aid, sig in self._latest_signals.items():
+            try:
+                ts = datetime.fromisoformat(sig.get("timestamp", ""))
+                if (now - ts).total_seconds() > SIGNAL_TTL_SECONDS:
+                    expired.append(aid)
+            except (ValueError, TypeError):
+                expired.append(aid)
+        for aid in expired:
+            del self._latest_signals[aid]
 
     async def _evaluate_btst(self) -> Signal | None:
         self._btst_evaluated_today = True
@@ -149,20 +166,26 @@ Should we take a BTST position? Respond with JSON."""
         confidence = float(result.get("confidence", 0.5))
         lots = 1
 
+        expiry_preference = result.get("expiry_preference", "MONTHLY")
+        if day_of_week == "Wednesday" and expiry_preference == "WEEKLY":
+            expiry_preference = "MONTHLY"
+            self.logger.warning("Wednesday hard guard: overriding expiry_preference from WEEKLY to MONTHLY")
+
         lot_size = BANKNIFTY_LOT_SIZE if underlying == "BANKNIFTY" else NIFTY_LOT_SIZE
         trade_id = f"BTST-{underlying}-{uuid.uuid4().hex[:8]}"
 
-        return self.create_signal(
-            underlying=underlying,
-            direction=direction,
-            confidence=confidence,
-            timeframe="BTST",
-            reasoning=result.get("reasoning", "BTST trade proposal"),
-            supporting_data={
+        proposal = {
+            "agent_id": self.agent_id,
+            "underlying": underlying,
+            "direction": direction,
+            "confidence": confidence,
+            "timeframe": "BTST",
+            "reasoning": result.get("reasoning", "BTST trade proposal"),
+            "supporting_data": {
                 "trade_id": trade_id,
                 "trade_type": "BTST",
                 "option_type": option_type,
-                "expiry_preference": result.get("expiry_preference", "MONTHLY"),
+                "expiry_preference": expiry_preference,
                 "lots": lots,
                 "lot_size": lot_size,
                 "quantity": lots * lot_size,
@@ -174,4 +197,8 @@ Should we take a BTST position? Respond with JSON."""
                 "is_expiry_day": self.is_expiry_day(),
                 "day_of_week": day_of_week,
             },
-        )
+        }
+
+        await self.publisher.publish_trade_proposal(proposal)
+        self.logger.info(f"BTST proposal published to trade_proposals: {trade_id} {direction} {underlying}")
+        return None
