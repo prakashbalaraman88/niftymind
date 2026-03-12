@@ -1,0 +1,27 @@
+kind = "mobile"
+previewPath = "/mobile/"
+title = "NiftyMind"
+version = "1.0.0"
+id = "artifacts/mobile"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+ensurePreviewReachable = "/status"
+localPort = 18115
+name = "expo"
+paths = ["/mobile/"]
+
+[services.development]
+run = "pnpm --filter @workspace/mobile run dev"
+
+[services.env]
+PORT = "18115"
+BASE_PATH = "/mobile/"
+
+[services.production]
+build = ["pnpm", "--filter", "@workspace/mobile", "run", "build"]
+run = ["pnpm", "--filter", "@workspace/mobile", "run", "serve"]

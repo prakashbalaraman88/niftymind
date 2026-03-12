@@ -26,7 +26,8 @@ NiftyMind — Multi-Agent AI Options Trading System. A pnpm workspace monorepo (
 ```text
 artifacts-monorepo/
 ├── artifacts/              # Deployable applications
-│   └── api-server/         # Express API server
+│   ├── api-server/         # Express API server
+│   └── mobile/             # React Native Expo mobile app (NiftyMind)
 ├── backend/                # Python trading engine
 │   ├── main.py             # Entry point — starts data pipeline
 │   ├── config.py           # Configuration from env vars
