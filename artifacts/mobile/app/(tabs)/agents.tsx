@@ -7,7 +7,7 @@ import {
   RefreshControl,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import colors from "@/constants/colors";
 import { AGENT_INFO, AGENT_IDS } from "@/constants/agents";
@@ -20,30 +20,40 @@ import type { Signal, AgentStatus } from "@/types/api";
 
 export default function AgentsScreen() {
   const { subscribe } = useWebSocket();
+  const queryClient = useQueryClient();
 
   const { data: agentData, isLoading: loadingAgents, isError: agentsError, refetch: refetchAgents, isRefetching } = useQuery({
     queryKey: ["agents"],
     queryFn: api.getAgents,
-    refetchInterval: 15000,
+    refetchInterval: 30000,
     retry: false,
   });
 
   const { data: signalData, isLoading: loadingSignals, isError: signalsError, refetch: refetchSignals } = useQuery({
     queryKey: ["signals"],
     queryFn: () => api.getSignals(100),
-    refetchInterval: 15000,
+    refetchInterval: 30000,
     retry: false,
   });
 
   const [liveSignals, setLiveSignals] = useState<Record<string, Signal>>({});
+  const [liveActivity, setLiveActivity] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    return subscribe("signal", (data: any) => {
+    const unsub1 = subscribe("signal", (data: any) => {
       if (data?.agent_id) {
         setLiveSignals((prev) => ({ ...prev, [data.agent_id]: data as Signal }));
       }
     });
-  }, [subscribe]);
+    const unsub2 = subscribe("agent_status", (data: any) => {
+      const id = data?.agent_id || data?.source;
+      if (id) {
+        setLiveActivity((prev) => ({ ...prev, [id]: new Date().toISOString() }));
+        queryClient.invalidateQueries({ queryKey: ["agents"] });
+      }
+    });
+    return () => { unsub1(); unsub2(); };
+  }, [subscribe, queryClient]);
 
   const agentStatusMap: Record<string, AgentStatus> = {};
   (agentData?.agents || []).forEach((a) => {
@@ -79,8 +89,7 @@ export default function AgentsScreen() {
           const info = AGENT_INFO[id];
           const status = agentStatusMap[id];
           const latest = liveSignals[id] || (signalsByAgent[id]?.[0]);
-          const recentSignals = signalsByAgent[id]?.slice(0, 3) || [];
-          const lastActive = status?.timestamp || latest?.created_at;
+          const lastActive = liveActivity[id] || status?.timestamp || latest?.created_at;
 
           const isStale = lastActive
             ? Date.now() - new Date(lastActive).getTime() > 5 * 60 * 1000
@@ -90,7 +99,7 @@ export default function AgentsScreen() {
           const dirVariant = direction === "BULLISH" ? "bullish" : direction === "BEARISH" ? "bearish" : "neutral";
 
           return (
-            <Card key={id} style={[styles.agentCard, isStale && styles.staleCard]}>
+            <Card key={id} style={isStale ? { ...styles.agentCard, ...styles.staleCard } : styles.agentCard}>
               <View style={styles.agentHeader}>
                 <View style={styles.agentIconWrap}>
                   <Feather name={info.icon as any} size={18} color={colors.light.tint} />

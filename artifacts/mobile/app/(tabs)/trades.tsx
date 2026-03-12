@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -9,11 +9,12 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import colors from "@/constants/colors";
 import { AGENT_INFO } from "@/constants/agents";
 import { api } from "@/lib/api";
+import { useWebSocket } from "@/contexts/WebSocketContext";
 import { Card } from "@/components/Card";
 import { PnlText } from "@/components/PnlText";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -32,12 +33,21 @@ const FILTERS: { key: FilterStatus; label: string }[] = [
 export default function TradesScreen() {
   const [filter, setFilter] = useState<FilterStatus>("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { subscribe } = useWebSocket();
+  const queryClient = useQueryClient();
 
   const { data, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ["trades", filter],
     queryFn: () => api.getTrades(100, 0, filter === "all" ? undefined : filter),
     retry: false,
   });
+
+  useEffect(() => {
+    const unsub = subscribe("trade_execution", () => {
+      queryClient.invalidateQueries({ queryKey: ["trades"] });
+    });
+    return unsub;
+  }, [subscribe, queryClient]);
 
   const trades = data?.trades || [];
 
@@ -128,6 +138,7 @@ function TradeExpanded({ tradeId, trade }: { tradeId: string; trade: Trade }) {
   const { data, isLoading } = useQuery<TradeDetail>({
     queryKey: ["trade-detail", tradeId],
     queryFn: () => api.getTradeDetail(tradeId),
+    retry: false,
   });
 
   if (isLoading) {
@@ -197,17 +208,24 @@ function VoteRow({ vote }: { vote: AgentVote }) {
 
   return (
     <View style={styles.voteRow}>
-      <View style={styles.voteLeft}>
-        <Feather name={info?.icon as any || "cpu"} size={14} color={dirColor} />
-        <Text style={styles.voteName}>{info?.name || vote.agent_id}</Text>
-      </View>
-      <View style={styles.voteRight}>
-        <View style={[styles.voteConfBar]}>
-          <View style={[styles.voteConfFill, { width: `${vote.confidence * 100}%`, backgroundColor: dirColor }]} />
+      <View style={styles.voteTop}>
+        <View style={styles.voteLeft}>
+          <Feather name={info?.icon as any || "cpu"} size={14} color={dirColor} />
+          <Text style={styles.voteName}>{info?.name || vote.agent_id}</Text>
         </View>
-        <Text style={[styles.voteDir, { color: dirColor }]}>{vote.direction}</Text>
-        <Text style={styles.voteConf}>{(vote.confidence * 100).toFixed(0)}%</Text>
+        <View style={styles.voteRight}>
+          <View style={[styles.voteConfBar]}>
+            <View style={[styles.voteConfFill, { width: `${vote.confidence * 100}%`, backgroundColor: dirColor }]} />
+          </View>
+          <Text style={[styles.voteDir, { color: dirColor }]}>{vote.direction}</Text>
+          <Text style={styles.voteConf}>{(vote.confidence * 100).toFixed(0)}%</Text>
+        </View>
       </View>
+      {!!vote.reasoning && (
+        <Text style={styles.voteReasoning} numberOfLines={3}>
+          {vote.reasoning}
+        </Text>
+      )}
     </View>
   );
 }
@@ -354,12 +372,14 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   voteRow: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.light.border,
+  },
+  voteTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.light.border,
   },
   voteLeft: {
     flexDirection: "row",
@@ -400,5 +420,13 @@ const styles = StyleSheet.create({
     color: colors.light.textSecondary,
     width: 30,
     textAlign: "right",
+  },
+  voteReasoning: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    color: colors.light.textSecondary,
+    lineHeight: 16,
+    marginTop: 4,
+    paddingLeft: 20,
   },
 });

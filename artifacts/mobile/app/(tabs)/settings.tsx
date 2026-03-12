@@ -15,6 +15,7 @@ import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
+import Slider from "@react-native-community/slider";
 
 import colors from "@/constants/colors";
 import { api } from "@/lib/api";
@@ -23,22 +24,32 @@ import { Card } from "@/components/Card";
 import { StatusBadge } from "@/components/StatusBadge";
 import type { Settings } from "@/types/api";
 
+const INSTRUMENTS = ["NIFTY", "BANKNIFTY"];
+
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
-  const { connected } = useWebSocket();
+  const { connected, subscribe } = useWebSocket();
 
   const { data: settings, isLoading, isError } = useQuery<Settings>({
     queryKey: ["settings"],
     queryFn: api.getSettings,
-    refetchInterval: 30000,
+    refetchInterval: 60000,
     retry: false,
   });
 
+  useEffect(() => {
+    const unsub = subscribe("trade_execution", () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    });
+    return unsub;
+  }, [subscribe, queryClient]);
+
   const [capital, setCapital] = useState("");
   const [maxDailyLoss, setMaxDailyLoss] = useState("");
-  const [maxTradeRisk, setMaxTradeRisk] = useState("");
-  const [maxPositions, setMaxPositions] = useState("");
+  const [maxTradeRisk, setMaxTradeRisk] = useState(2.0);
+  const [maxPositions, setMaxPositions] = useState(5);
+  const [selectedInstruments, setSelectedInstruments] = useState<string[]>(["NIFTY", "BANKNIFTY"]);
   const [showPinModal, setShowPinModal] = useState(false);
   const [pin, setPin] = useState("");
 
@@ -46,8 +57,11 @@ export default function SettingsScreen() {
     if (settings) {
       setCapital(String(settings.capital));
       setMaxDailyLoss(String(settings.max_daily_loss));
-      setMaxTradeRisk(String(settings.max_trade_risk_pct));
-      setMaxPositions(String(settings.max_open_positions));
+      setMaxTradeRisk(settings.max_trade_risk_pct);
+      setMaxPositions(settings.max_open_positions);
+      if (settings.instruments?.length) {
+        setSelectedInstruments(settings.instruments);
+      }
     }
   }, [settings]);
 
@@ -84,16 +98,25 @@ export default function SettingsScreen() {
     mutation.mutate({ trading_mode: "live", live_pin: pin });
   };
 
+  const toggleInstrument = (instrument: string) => {
+    setSelectedInstruments((prev) => {
+      if (prev.includes(instrument)) {
+        if (prev.length <= 1) return prev;
+        return prev.filter((i) => i !== instrument);
+      }
+      return [...prev, instrument];
+    });
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
   const handleSaveRisk = () => {
     const updates: Record<string, unknown> = {};
     const cap = parseFloat(capital);
     if (!isNaN(cap) && cap > 0 && cap !== settings?.capital) updates.capital = cap;
     const mdl = parseFloat(maxDailyLoss);
     if (!isNaN(mdl) && mdl > 0 && mdl !== settings?.max_daily_loss) updates.max_daily_loss = mdl;
-    const mtr = parseFloat(maxTradeRisk);
-    if (!isNaN(mtr) && mtr > 0 && mtr !== settings?.max_trade_risk_pct) updates.max_trade_risk_pct = mtr;
-    const mp = parseInt(maxPositions, 10);
-    if (!isNaN(mp) && mp > 0 && mp !== settings?.max_open_positions) updates.max_open_positions = mp;
+    if (maxTradeRisk !== settings?.max_trade_risk_pct) updates.max_trade_risk_pct = maxTradeRisk;
+    if (maxPositions !== settings?.max_open_positions) updates.max_open_positions = maxPositions;
 
     if (Object.keys(updates).length === 0) {
       Alert.alert("No Changes", "Nothing to update.");
@@ -142,6 +165,32 @@ export default function SettingsScreen() {
       </Card>
 
       <Card style={styles.sectionCard}>
+        <Text style={styles.sectionTitle}>Instruments</Text>
+        <Text style={styles.sectionSubtitle}>Select which indices to trade</Text>
+        <View style={styles.instrumentRow}>
+          {INSTRUMENTS.map((inst) => {
+            const isSelected = selectedInstruments.includes(inst);
+            return (
+              <Pressable
+                key={inst}
+                onPress={() => toggleInstrument(inst)}
+                style={[styles.instrumentChip, isSelected && styles.instrumentChipActive]}
+              >
+                <Feather
+                  name={isSelected ? "check-circle" : "circle"}
+                  size={16}
+                  color={isSelected ? colors.light.tint : colors.light.textTertiary}
+                />
+                <Text style={[styles.instrumentText, isSelected && styles.instrumentTextActive]}>
+                  {inst}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </Card>
+
+      <Card style={styles.sectionCard}>
         <Text style={styles.sectionTitle}>Connection</Text>
         <View style={styles.settingRow}>
           <Feather name="wifi" size={16} color={connected ? colors.light.green : colors.light.red} />
@@ -150,13 +199,6 @@ export default function SettingsScreen() {
             {connected ? "Connected" : "Disconnected"}
           </Text>
         </View>
-        {settings?.instruments && (
-          <View style={styles.settingRow}>
-            <Feather name="target" size={16} color={colors.light.tint} />
-            <Text style={styles.settingLabel}>Instruments</Text>
-            <Text style={styles.settingValue}>{settings.instruments.join(", ")}</Text>
-          </View>
-        )}
       </Card>
 
       <Card style={styles.sectionCard}>
@@ -176,19 +218,42 @@ export default function SettingsScreen() {
           onChangeText={setMaxDailyLoss}
           keyboardType="numeric"
         />
-        <SettingInput
-          label="Max Trade Risk"
-          suffix="%"
-          value={maxTradeRisk}
-          onChangeText={setMaxTradeRisk}
-          keyboardType="decimal-pad"
-        />
-        <SettingInput
-          label="Max Positions"
-          value={maxPositions}
-          onChangeText={setMaxPositions}
-          keyboardType="number-pad"
-        />
+
+        <View style={styles.sliderRow}>
+          <View style={styles.sliderHeader}>
+            <Text style={styles.inputLabel}>Max Trade Risk</Text>
+            <Text style={styles.sliderValue}>{maxTradeRisk.toFixed(1)}%</Text>
+          </View>
+          <Slider
+            style={styles.slider}
+            minimumValue={0.5}
+            maximumValue={10}
+            step={0.5}
+            value={maxTradeRisk}
+            onValueChange={setMaxTradeRisk}
+            minimumTrackTintColor={colors.light.tint}
+            maximumTrackTintColor={colors.light.border}
+            thumbTintColor={colors.light.tint}
+          />
+        </View>
+
+        <View style={styles.sliderRow}>
+          <View style={styles.sliderHeader}>
+            <Text style={styles.inputLabel}>Max Open Positions</Text>
+            <Text style={styles.sliderValue}>{maxPositions}</Text>
+          </View>
+          <Slider
+            style={styles.slider}
+            minimumValue={1}
+            maximumValue={20}
+            step={1}
+            value={maxPositions}
+            onValueChange={setMaxPositions}
+            minimumTrackTintColor={colors.light.tint}
+            maximumTrackTintColor={colors.light.border}
+            thumbTintColor={colors.light.tint}
+          />
+        </View>
 
         <Pressable
           onPress={handleSaveRisk}
@@ -210,7 +275,7 @@ export default function SettingsScreen() {
       <Card style={styles.sectionCard}>
         <Text style={styles.sectionTitle}>System Info</Text>
         <View style={styles.settingRow}>
-          <Text style={styles.settingLabel}>VIX Halt</Text>
+          <Text style={styles.settingLabel}>VIX Halt Threshold</Text>
           <Text style={styles.settingValue}>{settings?.vix_halt_threshold ?? 25}</Text>
         </View>
         <View style={styles.settingRow}>
@@ -337,7 +402,41 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: "Inter_600SemiBold",
     color: colors.light.text,
+    marginBottom: 4,
+  },
+  sectionSubtitle: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: colors.light.textSecondary,
     marginBottom: 12,
+  },
+  instrumentRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  instrumentChip: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: colors.light.background,
+    borderWidth: 1.5,
+    borderColor: colors.light.border,
+  },
+  instrumentChipActive: {
+    borderColor: colors.light.tint,
+    backgroundColor: colors.light.tintLight,
+  },
+  instrumentText: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: colors.light.textSecondary,
+  },
+  instrumentTextActive: {
+    color: colors.light.tint,
   },
   settingRow: {
     flexDirection: "row",
@@ -385,6 +484,24 @@ const styles = StyleSheet.create({
     color: colors.light.text,
     paddingVertical: 10,
     paddingHorizontal: 4,
+  },
+  sliderRow: {
+    marginBottom: 16,
+  },
+  sliderHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  sliderValue: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: colors.light.tint,
+  },
+  slider: {
+    width: "100%",
+    height: 36,
   },
   saveButton: {
     backgroundColor: colors.light.tint,

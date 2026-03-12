@@ -1,15 +1,14 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   RefreshControl,
-  Pressable,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import colors from "@/constants/colors";
 import { AGENT_INFO, AGENT_IDS } from "@/constants/agents";
@@ -23,22 +22,34 @@ import type { DashboardData, TickData } from "@/types/api";
 
 export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
-  const { connected, ticks } = useWebSocket();
+  const { connected, ticks, subscribe } = useWebSocket();
+  const queryClient = useQueryClient();
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery<DashboardData>({
     queryKey: ["dashboard"],
     queryFn: api.getDashboard,
-    refetchInterval: 10000,
+    refetchInterval: 30000,
     retry: false,
   });
 
+  useEffect(() => {
+    const unsub = subscribe("trade_execution", () => {
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    });
+    return unsub;
+  }, [subscribe, queryClient]);
+
   const niftyTick = ticks["NIFTY 50"] || ticks["NIFTY"] || ticks["Nifty 50"];
   const bankNiftyTick = ticks["BANKNIFTY"] || ticks["BANK NIFTY"] || ticks["Bank Nifty"];
+  const vixTick = ticks["INDIA VIX"] || ticks["VIX"] || ticks["India VIX"];
 
   const tradingMode = data?.trading_mode || "paper";
   const totalPnl = data?.executor?.today_pnl ?? data?.executor?.total_pnl ?? 0;
   const openPositions = data?.positions?.open || [];
   const capital = data?.capital ?? 500000;
+  const vixHalt = data?.risk_limits?.vix_halt_threshold ?? 25;
+  const vixValue = vixTick?.ltp ?? 0;
+  const vixBreached = vixValue > 0 && vixValue > vixHalt;
 
   return (
     <ScrollView
@@ -69,17 +80,43 @@ export default function DashboardScreen() {
       ) : (
         <>
           <View style={styles.priceRow}>
-            <PriceCard
-              label="NIFTY 50"
-              tick={niftyTick}
-              fallbackPrice={0}
-            />
-            <PriceCard
-              label="BANKNIFTY"
-              tick={bankNiftyTick}
-              fallbackPrice={0}
-            />
+            <PriceCard label="NIFTY 50" tick={niftyTick} />
+            <PriceCard label="BANKNIFTY" tick={bankNiftyTick} />
           </View>
+
+          <Card style={styles.vixCard}>
+            <View style={styles.vixRow}>
+              <View style={styles.vixLeft}>
+                <Feather name="activity" size={16} color={vixBreached ? colors.light.red : colors.light.green} />
+                <Text style={styles.vixLabel}>India VIX</Text>
+              </View>
+              <View style={styles.vixRight}>
+                <Text style={[styles.vixValue, { color: vixBreached ? colors.light.red : colors.light.text }]}>
+                  {vixValue > 0 ? vixValue.toFixed(2) : "--"}
+                </Text>
+                <StatusBadge
+                  label={vixBreached ? "HALT" : vixValue > 0 ? "OK" : "N/A"}
+                  variant={vixBreached ? "high" : "low"}
+                  size="small"
+                />
+              </View>
+            </View>
+            <View style={styles.vixThresholdRow}>
+              <Text style={styles.vixThresholdText}>Halt threshold: {vixHalt}</Text>
+              {vixValue > 0 && (
+                <View style={styles.vixBarOuter}>
+                  <View style={[
+                    styles.vixBarInner,
+                    {
+                      width: `${Math.min((vixValue / (vixHalt * 1.5)) * 100, 100)}%`,
+                      backgroundColor: vixBreached ? colors.light.red : colors.light.green,
+                    },
+                  ]} />
+                  <View style={[styles.vixBarThreshold, { left: `${(vixHalt / (vixHalt * 1.5)) * 100}%` }]} />
+                </View>
+              )}
+            </View>
+          </Card>
 
           <Card style={styles.pnlCard}>
             <Text style={styles.cardLabel}>Today's P&L</Text>
@@ -139,8 +176,8 @@ export default function DashboardScreen() {
   );
 }
 
-function PriceCard({ label, tick, fallbackPrice }: { label: string; tick?: TickData; fallbackPrice: number }) {
-  const price = tick?.ltp ?? fallbackPrice;
+function PriceCard({ label, tick }: { label: string; tick?: TickData }) {
+  const price = tick?.ltp ?? 0;
   const change = tick?.change_pct ?? 0;
   const isUp = change >= 0;
 
@@ -266,6 +303,63 @@ const styles = StyleSheet.create({
   changeText: {
     fontSize: 12,
     fontFamily: "Inter_600SemiBold",
+  },
+  vixCard: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    padding: 14,
+  },
+  vixRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  vixLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  vixLabel: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: colors.light.text,
+  },
+  vixRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  vixValue: {
+    fontSize: 18,
+    fontFamily: "Inter_700Bold",
+  },
+  vixThresholdRow: {
+    marginTop: 8,
+  },
+  vixThresholdText: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    color: colors.light.textTertiary,
+    marginBottom: 4,
+  },
+  vixBarOuter: {
+    height: 4,
+    backgroundColor: colors.light.border,
+    borderRadius: 2,
+    overflow: "visible",
+    position: "relative" as const,
+  },
+  vixBarInner: {
+    height: 4,
+    borderRadius: 2,
+  },
+  vixBarThreshold: {
+    position: "absolute" as const,
+    top: -2,
+    width: 2,
+    height: 8,
+    backgroundColor: colors.light.red,
+    borderRadius: 1,
   },
   pnlCard: {
     marginHorizontal: 20,

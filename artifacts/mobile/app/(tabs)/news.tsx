@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect } from "react";
 import {
   View,
   Text,
@@ -8,22 +8,33 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import colors from "@/constants/colors";
 import { api } from "@/lib/api";
+import { useWebSocket } from "@/contexts/WebSocketContext";
 import { Card } from "@/components/Card";
 import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState } from "@/components/EmptyState";
 import type { NewsItem } from "@/types/api";
 
 export default function NewsScreen() {
+  const { subscribe } = useWebSocket();
+  const queryClient = useQueryClient();
+
   const { data, isLoading, refetch, isRefetching } = useQuery({
     queryKey: ["news"],
     queryFn: () => api.getNews(50),
-    refetchInterval: 30000,
+    refetchInterval: 60000,
     retry: false,
   });
+
+  useEffect(() => {
+    const unsub = subscribe("news", () => {
+      queryClient.invalidateQueries({ queryKey: ["news"] });
+    });
+    return unsub;
+  }, [subscribe, queryClient]);
 
   const news = data?.news || [];
 
