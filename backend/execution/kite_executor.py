@@ -14,6 +14,9 @@ logger = logging.getLogger("niftymind.kite_executor")
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
+ORDER_POLL_INTERVAL = 3.0
+ORDER_POLL_TIMEOUT = 60.0
+
 
 class KiteExecutor:
     def __init__(self, redis_publisher, zerodha_config):
@@ -24,6 +27,7 @@ class KiteExecutor:
         self._kite = None
         self._positions: dict[str, dict] = {}
         self._order_map: dict[str, str] = {}
+        self._bracket_orders: dict[str, dict] = {}
         self._daily_pnl: float = 0.0
         self._total_trades: int = 0
         self._winning_trades: int = 0
@@ -50,6 +54,8 @@ class KiteExecutor:
         self._init_kite()
 
         pubsub = await self.publisher.subscribe("trade_executions")
+
+        order_poll_task = asyncio.create_task(self._order_state_poller(shutdown_event))
 
         try:
             while not shutdown_event.is_set():
@@ -81,6 +87,11 @@ class KiteExecutor:
         except asyncio.CancelledError:
             logger.info("Kite Executor cancelled")
         finally:
+            order_poll_task.cancel()
+            try:
+                await order_poll_task
+            except asyncio.CancelledError:
+                pass
             await pubsub.unsubscribe()
             await pubsub.aclose()
             logger.info("Kite Executor stopped")
@@ -99,42 +110,53 @@ class KiteExecutor:
         direction = data.get("direction", "BULLISH")
         quantity = int(data.get("quantity", 0))
         trade_type = data.get("trade_type", "INTRADAY")
+        sl_points = float(data.get("sl_points", data.get("supporting_data", {}).get("sl_points", 20)))
+        target_points = float(data.get("target_points", data.get("supporting_data", {}).get("target_points", 40)))
 
         lot_size = BANKNIFTY_LOT_SIZE if underlying == "BANKNIFTY" else NIFTY_LOT_SIZE
         if quantity <= 0:
             quantity = lot_size
 
         if quantity % lot_size != 0:
-            quantity = (quantity // lot_size) * lot_size
-            if quantity <= 0:
-                quantity = lot_size
+            quantity = max(lot_size, (quantity // lot_size) * lot_size)
 
         transaction_type = "BUY" if direction == "BULLISH" else "SELL"
         trading_symbol = self._resolve_trading_symbol(underlying, direction)
         product = "MIS" if trade_type in ("SCALP", "INTRADAY") else "NRML"
 
+        use_bracket = trade_type in ("SCALP", "INTRADAY") and sl_points > 0 and target_points > 0
+
         try:
-            order_id = await asyncio.to_thread(
-                self._kite.place_order,
-                variety="regular",
-                exchange="NFO",
-                tradingsymbol=trading_symbol,
-                transaction_type=transaction_type,
-                quantity=quantity,
-                product=product,
-                order_type="MARKET",
-            )
+            if use_bracket:
+                order_id = await self._place_bracket_order(
+                    trading_symbol=trading_symbol,
+                    transaction_type=transaction_type,
+                    quantity=quantity,
+                    sl_points=sl_points,
+                    target_points=target_points,
+                )
+                variety = "bo"
+            else:
+                order_id = await self._place_regular_order_with_sl(
+                    trading_symbol=trading_symbol,
+                    transaction_type=transaction_type,
+                    quantity=quantity,
+                    product=product,
+                    sl_points=sl_points,
+                    direction=direction,
+                )
+                variety = "regular"
 
             self._order_map[trade_id] = str(order_id)
 
-            order_details = await asyncio.to_thread(
-                self._kite.order_history, order_id=order_id
-            )
-            fill_price = 0
-            for detail in reversed(order_details):
-                if detail.get("status") == "COMPLETE":
-                    fill_price = float(detail.get("average_price", 0))
-                    break
+            fill_price = await self._poll_until_filled(order_id, variety)
+
+            if direction == "BULLISH":
+                sl_price = round(fill_price - sl_points, 2)
+                target_price = round(fill_price + target_points, 2)
+            else:
+                sl_price = round(fill_price + sl_points, 2)
+                target_price = round(fill_price - target_points, 2)
 
             position = {
                 "trade_id": trade_id,
@@ -143,13 +165,24 @@ class KiteExecutor:
                 "direction": direction,
                 "quantity": quantity,
                 "entry_price": fill_price,
+                "sl_price": sl_price,
+                "target_price": target_price,
                 "trading_symbol": trading_symbol,
                 "product": product,
                 "trade_type": trade_type,
+                "variety": variety,
                 "entry_time": datetime.now(IST).isoformat(),
                 "status": "OPEN",
             }
             self._positions[trade_id] = position
+
+            if use_bracket:
+                self._bracket_orders[trade_id] = {
+                    "parent_order_id": str(order_id),
+                    "sl_child_id": None,
+                    "target_child_id": None,
+                    "status": "ACTIVE",
+                }
 
             upsert_trade(
                 trade_id=trade_id,
@@ -160,6 +193,9 @@ class KiteExecutor:
                 trade_type=trade_type,
                 consensus_score=float(data.get("confidence", 0)),
                 entry_price=fill_price,
+                sl_price=sl_price,
+                target_price=target_price,
+                entry_time=datetime.now(IST).isoformat(),
                 status="FILLED",
             )
 
@@ -171,16 +207,21 @@ class KiteExecutor:
                 quantity=quantity,
                 details={
                     "executor": "kite",
+                    "variety": variety,
                     "order_id": str(order_id),
                     "trading_symbol": trading_symbol,
                     "product": product,
+                    "sl_price": sl_price,
+                    "target_price": target_price,
+                    "sl_points": sl_points,
+                    "target_points": target_points,
                 },
             )
 
             log_audit(
                 event_type="KITE_ENTRY",
                 source="kite_executor",
-                message=f"Kite order placed: {transaction_type} {trading_symbol} x{quantity} order_id={order_id}",
+                message=f"Kite {variety} order: {transaction_type} {trading_symbol} x{quantity} SL={sl_price} TGT={target_price} order={order_id}",
                 trade_id=trade_id,
             )
 
@@ -191,13 +232,19 @@ class KiteExecutor:
                 "direction": direction,
                 "quantity": quantity,
                 "price": fill_price,
+                "sl_price": sl_price,
+                "target_price": target_price,
                 "trade_type": trade_type,
                 "executor": "kite",
+                "variety": variety,
                 "order_id": str(order_id),
                 "timestamp": datetime.now(IST).isoformat(),
             })
 
-            logger.info(f"Kite ENTRY: {trade_id} {transaction_type} {trading_symbol} x{quantity} order={order_id}")
+            logger.info(
+                f"Kite ENTRY ({variety}): {trade_id} {transaction_type} {trading_symbol} "
+                f"x{quantity} @ ₹{fill_price:,.2f} SL=₹{sl_price:,.2f} TGT=₹{target_price:,.2f}"
+            )
 
         except Exception as e:
             logger.error(f"Kite order placement failed for {trade_id}: {e}", exc_info=True)
@@ -218,6 +265,227 @@ class KiteExecutor:
                 "timestamp": datetime.now(IST).isoformat(),
             })
 
+    async def _place_bracket_order(self, trading_symbol: str, transaction_type: str,
+                                    quantity: int, sl_points: float,
+                                    target_points: float) -> str:
+        order_id = await asyncio.to_thread(
+            self._kite.place_order,
+            variety="bo",
+            exchange="NFO",
+            tradingsymbol=trading_symbol,
+            transaction_type=transaction_type,
+            quantity=quantity,
+            product="MIS",
+            order_type="MARKET",
+            stoploss=round(sl_points, 1),
+            squareoff=round(target_points, 1),
+        )
+        logger.info(f"Bracket order placed: {trading_symbol} SL={sl_points} TGT={target_points} order={order_id}")
+        return str(order_id)
+
+    async def _place_regular_order_with_sl(self, trading_symbol: str, transaction_type: str,
+                                            quantity: int, product: str,
+                                            sl_points: float, direction: str) -> str:
+        entry_order_id = await asyncio.to_thread(
+            self._kite.place_order,
+            variety="regular",
+            exchange="NFO",
+            tradingsymbol=trading_symbol,
+            transaction_type=transaction_type,
+            quantity=quantity,
+            product=product,
+            order_type="MARKET",
+        )
+
+        fill_price = await self._poll_until_filled(entry_order_id, "regular")
+
+        if fill_price > 0 and sl_points > 0:
+            if direction == "BULLISH":
+                sl_trigger = round(fill_price - sl_points, 1)
+                sl_limit = round(sl_trigger - 1.0, 1)
+            else:
+                sl_trigger = round(fill_price + sl_points, 1)
+                sl_limit = round(sl_trigger + 1.0, 1)
+
+            exit_type = "SELL" if transaction_type == "BUY" else "BUY"
+
+            try:
+                sl_order_id = await asyncio.to_thread(
+                    self._kite.place_order,
+                    variety="regular",
+                    exchange="NFO",
+                    tradingsymbol=trading_symbol,
+                    transaction_type=exit_type,
+                    quantity=quantity,
+                    product=product,
+                    order_type="SL",
+                    trigger_price=sl_trigger,
+                    price=sl_limit,
+                )
+                logger.info(f"SL order placed: trigger={sl_trigger} limit={sl_limit} order={sl_order_id}")
+            except Exception as e:
+                logger.error(f"SL order placement failed: {e}")
+
+        return str(entry_order_id)
+
+    async def _poll_until_filled(self, order_id: str, variety: str) -> float:
+        elapsed = 0.0
+        while elapsed < ORDER_POLL_TIMEOUT:
+            try:
+                order_history = await asyncio.to_thread(
+                    self._kite.order_history, order_id=order_id
+                )
+                for detail in reversed(order_history):
+                    status = detail.get("status", "")
+                    if status == "COMPLETE":
+                        return float(detail.get("average_price", 0))
+                    elif status in ("REJECTED", "CANCELLED"):
+                        raise RuntimeError(f"Order {order_id} {status}: {detail.get('status_message', '')}")
+            except RuntimeError:
+                raise
+            except Exception as e:
+                logger.warning(f"Order poll error for {order_id}: {e}")
+
+            await asyncio.sleep(ORDER_POLL_INTERVAL)
+            elapsed += ORDER_POLL_INTERVAL
+
+        logger.warning(f"Order {order_id} not filled within {ORDER_POLL_TIMEOUT}s timeout")
+        return 0
+
+    async def _order_state_poller(self, shutdown_event: asyncio.Event):
+        while not shutdown_event.is_set():
+            try:
+                await asyncio.sleep(5.0)
+                await self._check_bracket_exits()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Order state poller error: {e}", exc_info=True)
+
+    async def _check_bracket_exits(self):
+        if not self._bracket_orders:
+            return
+
+        try:
+            orders = await asyncio.to_thread(self._kite.orders)
+        except Exception as e:
+            logger.error(f"Failed to fetch orders: {e}")
+            return
+
+        for trade_id, bo in list(self._bracket_orders.items()):
+            if bo["status"] != "ACTIVE":
+                continue
+
+            parent_id = bo["parent_order_id"]
+            position = self._positions.get(trade_id)
+            if not position:
+                continue
+
+            for order in orders:
+                if str(order.get("parent_order_id", "")) != parent_id:
+                    continue
+                if order.get("status") != "COMPLETE":
+                    continue
+
+                child_txn = order.get("transaction_type", "")
+                parent_txn = "BUY" if position["direction"] == "BULLISH" else "SELL"
+
+                if child_txn != parent_txn:
+                    exit_price = float(order.get("average_price", 0))
+                    entry_price = position["entry_price"]
+                    quantity = position["quantity"]
+
+                    if position["direction"] == "BULLISH":
+                        pnl = (exit_price - entry_price) * quantity
+                    else:
+                        pnl = (entry_price - exit_price) * quantity
+                    pnl = round(pnl, 2)
+
+                    order_tag = order.get("tag", "")
+                    if exit_price <= position.get("sl_price", 0) if position["direction"] == "BULLISH" else exit_price >= position.get("sl_price", 0):
+                        exit_reason = "SL_HIT"
+                    elif exit_price >= position.get("target_price", 0) if position["direction"] == "BULLISH" else exit_price <= position.get("target_price", 0):
+                        exit_reason = "TARGET_HIT"
+                    else:
+                        exit_reason = "BRACKET_EXIT"
+
+                    await self._finalize_exit(trade_id, exit_price, pnl, exit_reason, str(order.get("order_id", "")))
+                    bo["status"] = "COMPLETED"
+                    break
+
+    async def _finalize_exit(self, trade_id: str, exit_price: float, pnl: float,
+                              exit_reason: str, exit_order_id: str):
+        position = self._positions.get(trade_id)
+        if not position:
+            return
+
+        underlying = position["underlying"]
+        direction = position["direction"]
+        quantity = position["quantity"]
+        trading_symbol = position["trading_symbol"]
+        entry_price = position["entry_price"]
+
+        self._daily_pnl += pnl
+        self._total_trades += 1
+        if pnl > 0:
+            self._winning_trades += 1
+
+        del self._positions[trade_id]
+        self._bracket_orders.pop(trade_id, None)
+
+        upsert_trade(
+            trade_id=trade_id,
+            symbol=trading_symbol,
+            underlying=underlying,
+            direction=direction,
+            quantity=quantity,
+            trade_type=position.get("trade_type", "INTRADAY"),
+            consensus_score=0,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            pnl=pnl,
+            exit_reason=exit_reason,
+            exit_time=datetime.now(IST).isoformat(),
+            status="CLOSED",
+        )
+
+        log_trade_event(
+            trade_id=trade_id,
+            event=exit_reason,
+            status="CLOSED",
+            price=exit_price,
+            quantity=quantity,
+            pnl=pnl,
+            details={
+                "executor": "kite",
+                "exit_order_id": exit_order_id,
+                "trading_symbol": trading_symbol,
+                "entry_price": entry_price,
+            },
+        )
+
+        log_audit(
+            event_type=f"KITE_{exit_reason}",
+            source="kite_executor",
+            message=f"Kite exit: {trade_id} {exit_reason} PnL=₹{pnl:,.2f} exit_order={exit_order_id}",
+            trade_id=trade_id,
+        )
+
+        await self.publisher.publish_trade_execution({
+            "event": exit_reason,
+            "trade_id": trade_id,
+            "underlying": underlying,
+            "direction": direction,
+            "quantity": quantity,
+            "price": exit_price,
+            "pnl": pnl,
+            "executor": "kite",
+            "exit_order_id": exit_order_id,
+            "timestamp": datetime.now(IST).isoformat(),
+        })
+
+        logger.info(f"Kite EXIT ({exit_reason}): {trade_id} PnL=₹{pnl:,.2f}")
+
     async def _place_exit_order(self, data: dict):
         trade_id = data.get("trade_id", "")
         exit_reason = data.get("exit_reason", "MANUAL")
@@ -233,6 +501,20 @@ class KiteExecutor:
         trading_symbol = position["trading_symbol"]
         product = position["product"]
         entry_price = position["entry_price"]
+        variety = position.get("variety", "regular")
+
+        if variety == "bo" and trade_id in self._bracket_orders:
+            try:
+                parent_id = self._bracket_orders[trade_id]["parent_order_id"]
+                await asyncio.to_thread(
+                    self._kite.cancel_order,
+                    variety="bo",
+                    order_id=parent_id,
+                    parent_order_id=parent_id,
+                )
+                logger.info(f"Cancelled bracket order {parent_id} for exit")
+            except Exception as e:
+                logger.warning(f"Bracket cancel failed, placing manual exit: {e}")
 
         transaction_type = "SELL" if direction == "BULLISH" else "BUY"
 
@@ -244,18 +526,11 @@ class KiteExecutor:
                 tradingsymbol=trading_symbol,
                 transaction_type=transaction_type,
                 quantity=quantity,
-                product=product,
+                product=product if variety != "bo" else "MIS",
                 order_type="MARKET",
             )
 
-            order_details = await asyncio.to_thread(
-                self._kite.order_history, order_id=order_id
-            )
-            exit_price = 0
-            for detail in reversed(order_details):
-                if detail.get("status") == "COMPLETE":
-                    exit_price = float(detail.get("average_price", 0))
-                    break
+            exit_price = await self._poll_until_filled(order_id, "regular")
 
             if direction == "BULLISH":
                 pnl = (exit_price - entry_price) * quantity
@@ -263,64 +538,7 @@ class KiteExecutor:
                 pnl = (entry_price - exit_price) * quantity
             pnl = round(pnl, 2)
 
-            self._daily_pnl += pnl
-            self._total_trades += 1
-            if pnl > 0:
-                self._winning_trades += 1
-
-            del self._positions[trade_id]
-
-            upsert_trade(
-                trade_id=trade_id,
-                symbol=trading_symbol,
-                underlying=underlying,
-                direction=direction,
-                quantity=quantity,
-                trade_type=position.get("trade_type", "INTRADAY"),
-                consensus_score=0,
-                entry_price=entry_price,
-                exit_price=exit_price,
-                pnl=pnl,
-                exit_reason=exit_reason,
-                exit_time=datetime.now(IST).isoformat(),
-                status="CLOSED",
-            )
-
-            log_trade_event(
-                trade_id=trade_id,
-                event=exit_reason,
-                status="CLOSED",
-                price=exit_price,
-                quantity=quantity,
-                pnl=pnl,
-                details={
-                    "executor": "kite",
-                    "exit_order_id": str(order_id),
-                    "trading_symbol": trading_symbol,
-                },
-            )
-
-            log_audit(
-                event_type="KITE_EXIT",
-                source="kite_executor",
-                message=f"Kite exit: {trade_id} {exit_reason} PnL=₹{pnl:,.2f} order={order_id}",
-                trade_id=trade_id,
-            )
-
-            await self.publisher.publish_trade_execution({
-                "event": exit_reason,
-                "trade_id": trade_id,
-                "underlying": underlying,
-                "direction": direction,
-                "quantity": quantity,
-                "price": exit_price,
-                "pnl": pnl,
-                "executor": "kite",
-                "exit_order_id": str(order_id),
-                "timestamp": datetime.now(IST).isoformat(),
-            })
-
-            logger.info(f"Kite EXIT: {trade_id} {exit_reason} PnL=₹{pnl:,.2f}")
+            await self._finalize_exit(trade_id, exit_price, pnl, exit_reason, str(order_id))
 
         except Exception as e:
             logger.error(f"Kite exit order failed for {trade_id}: {e}", exc_info=True)
@@ -368,4 +586,5 @@ class KiteExecutor:
             "winning_trades": self._winning_trades,
             "win_rate": round(win_rate, 1),
             "open_positions": len(self._positions),
+            "active_brackets": len([b for b in self._bracket_orders.values() if b["status"] == "ACTIVE"]),
         }
