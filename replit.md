@@ -35,7 +35,16 @@ artifacts-monorepo/
 │   │   ├── truedata_feed.py
 │   │   ├── options_chain_feed.py
 │   │   └── redis_publisher.py
-│   ├── agents/             # 12 AI agents (to be implemented)
+│   ├── agents/             # 12 AI agents
+│   │   ├── base_agent.py   # Shared lifecycle: market-hours, Redis, signals
+│   │   ├── llm_utils.py    # Claude API helper (query_claude)
+│   │   ├── options_chain_agent.py  # Agent 1: Options chain analysis
+│   │   ├── order_flow_agent.py     # Agent 2: Order flow (rule-based)
+│   │   ├── volume_profile_agent.py # Agent 3: Volume profile (rule-based)
+│   │   ├── technical_agent.py      # Agent 4: Multi-TF technical (rule-based)
+│   │   ├── sentiment_agent.py      # Agent 5: Market sentiment (LLM)
+│   │   ├── news_agent.py           # Agent 6: News & events (LLM)
+│   │   └── macro_agent.py          # Agent 7: Global macro (LLM)
 │   ├── execution/          # Paper + live trade executors
 │   └── api/                # FastAPI routes + WebSocket
 ├── lib/                    # Shared libraries
@@ -78,6 +87,13 @@ The Python trading engine handles:
 - `niftymind:trade_proposals` — Trade proposals from decision agents
 - `niftymind:trade_executions` — Executed trade confirmations
 - `niftymind:agent_status` — Agent health/state updates
+
+### Agent Architecture
+- **BaseAgent** (`base_agent.py`): Shared lifecycle with market-hours gate (9:15–15:30 IST), expiry-day detection (Thursday), Redis pub/sub subscription, Signal emission, and graceful shutdown
+- **Signal dataclass**: agent_id, timestamp, underlying, direction (BULLISH/BEARISH/NEUTRAL), confidence (0–1), timeframe (SCALP/INTRADAY/BTST), reasoning, supporting_data
+- **LLM agents** (1, 5, 6, 7): Use Claude API via `llm_utils.query_claude()` for reasoning
+- **Rule-based agents** (2, 3, 4): Pure computation, no LLM calls — optimized for low latency
+- Agents 5 (Sentiment), 6 (News), 7 (Macro) also run outside market hours (pre-market/always-on)
 
 ### Configuration (config.py)
 All config loaded from environment variables:
