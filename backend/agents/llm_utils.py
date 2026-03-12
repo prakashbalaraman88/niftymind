@@ -184,8 +184,14 @@ class GeminiClient(BaseLLMClient):
         }
 
         if use_thinking:
+            # thinking_budget is deprecated in Gemini 3 — use thinking_level instead
             config_params["thinking_config"] = types.ThinkingConfig(
-                thinking_budget=thinking_budget
+                thinking_level="HIGH"
+            )
+        elif model and "flash" in model.lower():
+            # Flash analysis agents: MINIMAL thinking for lowest latency
+            config_params["thinking_config"] = types.ThinkingConfig(
+                thinking_level="MINIMAL"
             )
 
         # google-genai SDK is sync — run in executor to avoid blocking event loop
