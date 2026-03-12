@@ -1,3 +1,10 @@
 const { getDefaultConfig } = require("expo/metro-config");
 
-module.exports = getDefaultConfig(__dirname);
+const config = getDefaultConfig(__dirname);
+
+config.resolver.blockList = [
+  /firebase.*_tmp_\d+/,
+  /messaging-compat_tmp_\d+/,
+];
+
+module.exports = config;

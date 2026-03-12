@@ -1,7 +1,10 @@
-import React from "react";
-import { View, Text, StyleSheet, Pressable } from "react-native";
+import React, { useRef, useEffect } from "react";
+import { View, Text, StyleSheet, Pressable, Animated } from "react-native";
 import { Feather } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import colors from "@/constants/colors";
+
+const C = colors.dark;
 
 interface Props {
   icon: string;
@@ -12,19 +15,39 @@ interface Props {
 }
 
 export function EmptyState({ icon, title, subtitle, actionLabel, onAction }: Props) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const scale = useRef(new Animated.Value(0.85)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(scale, { toValue: 1, useNativeDriver: true, damping: 14, mass: 0.8 }),
+      Animated.timing(opacity, { toValue: 1, duration: 500, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
   return (
-    <View style={styles.container}>
-      <View style={styles.iconWrap}>
-        <Feather name={icon as any} size={32} color={colors.light.textTertiary} />
-      </View>
+    <Animated.View style={[styles.container, { opacity, transform: [{ scale }] }]}>
+      <LinearGradient
+        colors={["rgba(124,58,237,0.15)", "rgba(37,99,235,0.08)"]}
+        style={styles.iconWrap}
+      >
+        <Feather name={icon as never} size={32} color={C.accentBright} />
+      </LinearGradient>
       <Text style={styles.title}>{title}</Text>
       {!!subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}
       {!!actionLabel && !!onAction && (
         <Pressable onPress={onAction} style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
-          <Text style={styles.buttonText}>{actionLabel}</Text>
+          <LinearGradient
+            colors={C.gradient.accent}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.buttonGradient}
+          >
+            <Text style={styles.buttonText}>{actionLabel}</Text>
+          </LinearGradient>
         </Pressable>
       )}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -37,34 +60,37 @@ const styles = StyleSheet.create({
     paddingVertical: 60,
   },
   iconWrap: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: "#F3F4F6",
+    width: 72,
+    height: 72,
+    borderRadius: 24,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "rgba(124,58,237,0.2)",
   },
   title: {
-    fontSize: 17,
+    fontSize: 18,
     fontFamily: "Inter_600SemiBold",
-    color: colors.light.text,
+    color: C.text,
     textAlign: "center",
-    marginBottom: 6,
+    marginBottom: 8,
   },
   subtitle: {
     fontSize: 14,
     fontFamily: "Inter_400Regular",
-    color: colors.light.textSecondary,
+    color: C.textSecondary,
     textAlign: "center",
-    lineHeight: 20,
+    lineHeight: 22,
   },
   button: {
-    marginTop: 20,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: colors.light.tint,
-    borderRadius: 10,
+    marginTop: 24,
+    borderRadius: 14,
+    overflow: "hidden",
+  },
+  buttonGradient: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
   },
   pressed: { opacity: 0.8 },
   buttonText: {

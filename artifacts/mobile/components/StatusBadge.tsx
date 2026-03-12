@@ -2,19 +2,25 @@ import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import colors from "@/constants/colors";
 
-type Variant = "bullish" | "bearish" | "neutral" | "active" | "inactive" | "paper" | "live" | "high" | "medium" | "low";
+const C = colors.dark;
 
-const VARIANT_COLORS: Record<Variant, { bg: string; text: string }> = {
-  bullish: { bg: colors.light.greenLight, text: colors.light.green },
-  bearish: { bg: colors.light.redLight, text: colors.light.red },
-  neutral: { bg: "#F3F4F6", text: colors.light.textSecondary },
-  active: { bg: colors.light.greenLight, text: colors.light.green },
-  inactive: { bg: "#F3F4F6", text: colors.light.textSecondary },
-  paper: { bg: colors.light.tintLight, text: colors.light.tint },
-  live: { bg: colors.light.redLight, text: colors.light.red },
-  high: { bg: colors.light.redLight, text: colors.light.red },
-  medium: { bg: colors.light.yellowLight, text: colors.light.yellow },
-  low: { bg: colors.light.greenLight, text: colors.light.green },
+type Variant =
+  | "bullish" | "bearish" | "neutral"
+  | "active" | "inactive"
+  | "paper" | "live"
+  | "high" | "medium" | "low";
+
+const VARIANT_COLORS: Record<Variant, { bg: string; text: string; border: string }> = {
+  bullish: { bg: C.greenDark, text: C.green, border: "rgba(16,240,160,0.2)" },
+  bearish: { bg: C.redDark, text: C.red, border: "rgba(255,59,92,0.2)" },
+  neutral: { bg: "rgba(255,255,255,0.06)", text: C.textSecondary, border: "rgba(255,255,255,0.1)" },
+  active: { bg: C.greenDark, text: C.green, border: "rgba(16,240,160,0.2)" },
+  inactive: { bg: "rgba(255,255,255,0.06)", text: C.textTertiary, border: "rgba(255,255,255,0.08)" },
+  paper: { bg: C.accentLight, text: C.accentBright, border: "rgba(124,58,237,0.2)" },
+  live: { bg: C.redDark, text: C.red, border: "rgba(255,59,92,0.2)" },
+  high: { bg: C.redDark, text: C.red, border: "rgba(255,59,92,0.2)" },
+  medium: { bg: C.goldDark, text: C.gold, border: "rgba(255,184,0,0.2)" },
+  low: { bg: C.greenDark, text: C.green, border: "rgba(16,240,160,0.2)" },
 };
 
 interface Props {
@@ -27,9 +33,16 @@ export function StatusBadge({ label, variant, size = "small" }: Props) {
   const c = VARIANT_COLORS[variant] || VARIANT_COLORS.neutral;
   const isSmall = size === "small";
   return (
-    <View style={[styles.badge, { backgroundColor: c.bg }, isSmall ? styles.small : styles.medium]}>
+    <View style={[
+      styles.badge,
+      {
+        backgroundColor: c.bg,
+        borderColor: c.border,
+      },
+      isSmall ? styles.small : styles.medium,
+    ]}>
       <Text style={[styles.text, { color: c.text }, isSmall ? styles.textSmall : styles.textMedium]}>
-        {label}
+        {label.toUpperCase()}
       </Text>
     </View>
   );
@@ -37,27 +50,13 @@ export function StatusBadge({ label, variant, size = "small" }: Props) {
 
 const styles = StyleSheet.create({
   badge: {
-    borderRadius: 6,
+    borderRadius: 8,
     alignSelf: "flex-start" as const,
+    borderWidth: 1,
   },
-  small: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  medium: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  text: {
-    fontFamily: "Inter_600SemiBold",
-    textTransform: "uppercase" as const,
-  },
-  textSmall: {
-    fontSize: 10,
-    letterSpacing: 0.5,
-  },
-  textMedium: {
-    fontSize: 11,
-    letterSpacing: 0.5,
-  },
+  small: { paddingHorizontal: 8, paddingVertical: 3 },
+  medium: { paddingHorizontal: 10, paddingVertical: 5 },
+  text: { fontFamily: "Inter_600SemiBold", letterSpacing: 0.6 },
+  textSmall: { fontSize: 10 },
+  textMedium: { fontSize: 11 },
 });
