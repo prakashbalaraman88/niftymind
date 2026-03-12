@@ -234,6 +234,6 @@ React Native Expo mobile app for NiftyMind. 5-tab layout: Dashboard, Trades, Age
 - **News** (`app/(tabs)/news.tsx`): SectionList with "Upcoming Events" (sorted by impact then time) and "Market News" (sorted by recency), WebSocket-driven invalidation
 - **Settings** (`app/(tabs)/settings.tsx`): Trading mode toggle (paper/live with PIN modal), instrument selection (NIFTY/BANKNIFTY) persisted to backend, capital & risk parameters with sliders
 - **WebSocket** (`contexts/WebSocketContext.tsx`): Auto-reconnect, ping/pong, per-type subscription pattern, tick state management
-- **Push Notifications** (`lib/notifications.ts`): Expo Push (FCM/APNs backed) with trade execution and risk alert channels, token registration to backend via `/push-token`
+- **Push Notifications** (`lib/notifications.ts`): FCM-backed via expo-notifications. Retrieves FCM device token + Expo push token, registers with backend. Requires: (1) `google-services.json` from Firebase Console placed in `artifacts/mobile/` for Android, (2) EAS project ID set in `app.json` `extra.eas.projectId` for iOS push tokens
 - **API Client** (`lib/api.ts`): Typed fetch client targeting FastAPI backend at `EXPO_PUBLIC_DOMAIN`
 - Depends on: `expo-notifications`, `expo-device`, `expo-haptics`, `@react-native-community/slider`, `@tanstack/react-query`
