@@ -223,3 +223,17 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+
+### `artifacts/mobile` (`@workspace/mobile`)
+
+React Native Expo mobile app for NiftyMind. 5-tab layout: Dashboard, Trades, Agents, News, Settings.
+
+- **Dashboard** (`app/(tabs)/index.tsx`): Live NIFTY/BANKNIFTY prices via WebSocket ticks, India VIX with halt threshold bar, today's P&L, open positions, 12-agent status grid
+- **Trades** (`app/(tabs)/trades.tsx`): Filterable trade list (All/Open/Closed/Cancelled), expandable detail with entry/SL/target prices, consensus score, per-agent votes with reasoning text
+- **Agents** (`app/(tabs)/agents.tsx`): All 12 agents with latest signal direction, confidence bar, reasoning, staleness indicator, live activity via WebSocket
+- **News** (`app/(tabs)/news.tsx`): SectionList with "Upcoming Events" (sorted by impact then time) and "Market News" (sorted by recency), WebSocket-driven invalidation
+- **Settings** (`app/(tabs)/settings.tsx`): Trading mode toggle (paper/live with PIN modal), instrument selection (NIFTY/BANKNIFTY) persisted to backend, capital & risk parameters with sliders
+- **WebSocket** (`contexts/WebSocketContext.tsx`): Auto-reconnect, ping/pong, per-type subscription pattern, tick state management
+- **Push Notifications** (`lib/notifications.ts`): Expo Push (FCM/APNs backed) with trade execution and risk alert channels, token registration to backend via `/push-token`
+- **API Client** (`lib/api.ts`): Typed fetch client targeting FastAPI backend at `EXPO_PUBLIC_DOMAIN`
+- Depends on: `expo-notifications`, `expo-device`, `expo-haptics`, `@react-native-community/slider`, `@tanstack/react-query`
