@@ -113,9 +113,8 @@ def insert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
                  sl_price: float | None = None,
                  target_price: float | None = None,
                  status: str = "PROPOSED"):
-    """Insert a trade row. Uses ON CONFLICT DO NOTHING so callers can safely call
-    this for proposals regardless of whether a row already exists (e.g., created
-    by ConsensusOrchestrator earlier in the pipeline)."""
+    """Insert a new trade row. Uses ON CONFLICT DO NOTHING — caller is responsible
+    for uniqueness (e.g., ConsensusOrchestrator creating placeholder rows)."""
     conn = _get_conn()
     if not conn:
         return
@@ -134,6 +133,42 @@ def insert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
         conn.commit()
     except Exception as e:
         logger.error(f"Failed to insert trade: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+def upsert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
+                 quantity: int, trade_type: str, consensus_score: float,
+                 entry_price: float | None = None,
+                 sl_price: float | None = None,
+                 target_price: float | None = None,
+                 status: str = "PROPOSED"):
+    """Insert or update a trade row. On trade_id conflict, updates status, quantity,
+    consensus_score, and updated_at. Used by RiskManager to record final verdicts
+    regardless of whether ConsensusOrchestrator already created a placeholder row."""
+    conn = _get_conn()
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO trades (id, trade_id, symbol, underlying, direction,
+               entry_price, sl_price, target_price, quantity, status,
+               consensus_score, trade_type, created_at, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (trade_id) DO UPDATE SET
+                 status = EXCLUDED.status,
+                 quantity = EXCLUDED.quantity,
+                 consensus_score = EXCLUDED.consensus_score,
+                 updated_at = EXCLUDED.updated_at""",
+            (str(uuid.uuid4()), trade_id, symbol, underlying, direction,
+             entry_price, sl_price, target_price, quantity, status,
+             consensus_score, trade_type, datetime.now(IST), datetime.now(IST)),
+        )
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to upsert trade: {e}")
         conn.rollback()
     finally:
         conn.close()

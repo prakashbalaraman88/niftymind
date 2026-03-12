@@ -129,7 +129,7 @@ class RiskManager(BaseAgent):
         check_summary = "; ".join(f"{c['name']}: {'PASS' if c['passed'] else 'FAIL'} — {c['detail']}" for c in checks)
         reasoning = f"Risk Manager {verdict}: {check_summary}"
 
-        db_logger.insert_trade(
+        db_logger.upsert_trade(
             trade_id=trade_id,
             symbol=f"{underlying} {data.get('supporting_data', {}).get('option_type', 'CE')}",
             underlying=underlying,
