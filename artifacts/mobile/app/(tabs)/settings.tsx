@@ -100,11 +100,15 @@ export default function SettingsScreen() {
 
   const toggleInstrument = (instrument: string) => {
     setSelectedInstruments((prev) => {
+      let next: string[];
       if (prev.includes(instrument)) {
         if (prev.length <= 1) return prev;
-        return prev.filter((i) => i !== instrument);
+        next = prev.filter((i) => i !== instrument);
+      } else {
+        next = [...prev, instrument];
       }
-      return [...prev, instrument];
+      mutation.mutate({ instruments: next });
+      return next;
     });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };

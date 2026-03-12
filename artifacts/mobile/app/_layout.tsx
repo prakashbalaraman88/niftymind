@@ -8,13 +8,18 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { WebSocketProvider } from "@/contexts/WebSocketContext";
+import { WebSocketProvider, useWebSocket } from "@/contexts/WebSocketContext";
+import {
+  registerForPushNotifications,
+  fireTradeNotification,
+  fireRiskNotification,
+} from "@/lib/notifications";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -26,6 +31,30 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+function NotificationWatcher({ children }: { children: React.ReactNode }) {
+  const { subscribe } = useWebSocket();
+  const registeredRef = useRef(false);
+
+  useEffect(() => {
+    if (!registeredRef.current) {
+      registeredRef.current = true;
+      registerForPushNotifications();
+    }
+  }, []);
+
+  useEffect(() => {
+    const unsub1 = subscribe("trade_execution", (data: unknown) => {
+      fireTradeNotification(data as Record<string, unknown>);
+    });
+    const unsub2 = subscribe("risk_alert", (data: unknown) => {
+      fireRiskNotification(data as Record<string, unknown>);
+    });
+    return () => { unsub1(); unsub2(); };
+  }, [subscribe]);
+
+  return <>{children}</>;
+}
 
 function RootLayoutNav() {
   return (
@@ -56,11 +85,13 @@ export default function RootLayout() {
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <WebSocketProvider>
-            <GestureHandlerRootView>
-              <KeyboardProvider>
-                <RootLayoutNav />
-              </KeyboardProvider>
-            </GestureHandlerRootView>
+            <NotificationWatcher>
+              <GestureHandlerRootView>
+                <KeyboardProvider>
+                  <RootLayoutNav />
+                </KeyboardProvider>
+              </GestureHandlerRootView>
+            </NotificationWatcher>
           </WebSocketProvider>
         </QueryClientProvider>
       </ErrorBoundary>
