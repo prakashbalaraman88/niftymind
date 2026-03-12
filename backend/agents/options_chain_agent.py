@@ -90,26 +90,37 @@ class OptionsChainAgent(BaseAgent):
             reverse=True,
         )[:10]
 
-        ce_summary = "\n".join(
-            f"  Strike {o.get('strike')}: OI={o.get('oi')} OI_Change={o.get('oi_change')} "
-            f"IV={o.get('iv'):.1f}% Delta={o.get('delta'):.3f} LTP={o.get('ltp')}"
-            for o in top_ce_oi
-        )
-        pe_summary = "\n".join(
-            f"  Strike {o.get('strike')}: OI={o.get('oi')} OI_Change={o.get('oi_change')} "
-            f"IV={o.get('iv'):.1f}% Delta={o.get('delta'):.3f} LTP={o.get('ltp')}"
-            for o in top_pe_oi
-        )
+        def _fmt_option(o: dict) -> str:
+            iv = o.get("iv")
+            delta = o.get("delta")
+            iv_str = f"{iv:.1f}%" if isinstance(iv, (int, float)) else "N/A"
+            delta_str = f"{delta:.3f}" if isinstance(delta, (int, float)) else "N/A"
+            return (
+                f"  Strike {o.get('strike')}: OI={o.get('oi')} OI_Change={o.get('oi_change')} "
+                f"IV={iv_str} Delta={delta_str} LTP={o.get('ltp')}"
+            )
+
+        ce_summary = "\n".join(_fmt_option(o) for o in top_ce_oi)
+        pe_summary = "\n".join(_fmt_option(o) for o in top_pe_oi)
+
+        pcr = data.get("pcr")
+        iv_rank = data.get("iv_rank")
+        iv_pct = data.get("iv_percentile")
+        pcr_str = f"{pcr:.2f}" if isinstance(pcr, (int, float)) else "N/A"
+        ivr_str = f"{iv_rank:.1f}%" if isinstance(iv_rank, (int, float)) else "N/A"
+        ivp_str = f"{iv_pct:.1f}%" if isinstance(iv_pct, (int, float)) else "N/A"
+        ce_oi = data.get("total_ce_oi", 0) or 0
+        pe_oi = data.get("total_pe_oi", 0) or 0
 
         return f"""Analyze this options chain snapshot for {data.get('underlying', 'UNKNOWN')}:
 
 Spot Price: {data.get('spot_price')}
-PCR: {data.get('pcr', 0):.2f}
+PCR: {pcr_str}
 Max Pain: {data.get('max_pain')}
-IV Rank: {data.get('iv_rank', 0):.1f}%
-IV Percentile: {data.get('iv_percentile', 0):.1f}%
-Total CE OI: {data.get('total_ce_oi', 0):,}
-Total PE OI: {data.get('total_pe_oi', 0):,}
+IV Rank: {ivr_str}
+IV Percentile: {ivp_str}
+Total CE OI: {ce_oi:,}
+Total PE OI: {pe_oi:,}
 Is Expiry Day: {self.is_expiry_day()}
 
 Top 10 CE by OI:
