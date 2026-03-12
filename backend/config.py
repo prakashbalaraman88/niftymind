@@ -100,15 +100,39 @@ class RiskConfig:
     )
 
 
+VALID_TRADING_MODES = {"paper", "live"}
+VALID_INSTRUMENTS = {"NIFTY", "BANKNIFTY"}
+
+
+def _validated_trading_mode() -> str:
+    mode = os.getenv("TRADING_MODE", "paper").lower()
+    if mode not in VALID_TRADING_MODES:
+        raise EnvironmentError(
+            f"TRADING_MODE must be one of {VALID_TRADING_MODES}, got '{mode}'"
+        )
+    return mode
+
+
+def _validated_instruments() -> list[str]:
+    raw = os.getenv("TRADING_INSTRUMENTS", "NIFTY,BANKNIFTY").upper().split(",")
+    instruments = [i.strip() for i in raw if i.strip()]
+    invalid = set(instruments) - VALID_INSTRUMENTS
+    if invalid:
+        raise EnvironmentError(
+            f"TRADING_INSTRUMENTS contains invalid values: {invalid}. Allowed: {VALID_INSTRUMENTS}"
+        )
+    if not instruments:
+        raise EnvironmentError("TRADING_INSTRUMENTS must contain at least one instrument")
+    return instruments
+
+
 @dataclass(frozen=True)
 class TradingConfig:
     mode: Literal["paper", "live"] = field(
-        default_factory=lambda: os.getenv("TRADING_MODE", "paper").lower()  # type: ignore
+        default_factory=_validated_trading_mode  # type: ignore
     )
     instruments: list[str] = field(
-        default_factory=lambda: os.getenv("TRADING_INSTRUMENTS", "NIFTY,BANKNIFTY")
-        .upper()
-        .split(",")
+        default_factory=_validated_instruments
     )
     consensus_threshold: float = field(
         default_factory=lambda: _env_float("CONSENSUS_THRESHOLD", 0.65)

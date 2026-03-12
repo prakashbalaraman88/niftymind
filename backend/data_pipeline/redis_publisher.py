@@ -1,22 +1,15 @@
 import json
 import logging
+import sys
+import os
 from dataclasses import asdict
 
 import redis.asyncio as aioredis
 
-logger = logging.getLogger("niftymind.redis_publisher")
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from config import REDIS_CHANNELS as CHANNELS
 
-CHANNELS = {
-    "ticks": "niftymind:ticks",
-    "options_chain": "niftymind:options_chain",
-    "ohlc_1m": "niftymind:ohlc:1m",
-    "ohlc_5m": "niftymind:ohlc:5m",
-    "ohlc_15m": "niftymind:ohlc:15m",
-    "signals": "niftymind:signals",
-    "trade_proposals": "niftymind:trade_proposals",
-    "trade_executions": "niftymind:trade_executions",
-    "agent_status": "niftymind:agent_status",
-}
+logger = logging.getLogger("niftymind.redis_publisher")
 
 
 class RedisPublisher:
