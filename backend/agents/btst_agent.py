@@ -89,7 +89,7 @@ class BTSTDecisionAgent(BaseAgent):
         if self._btst_evaluated_today:
             return None
 
-        if len(self._latest_signals) < 4:
+        if len(self._latest_signals) < 7:
             return None
 
         return await self._evaluate_btst()

@@ -10,7 +10,7 @@ from agents.llm_utils import query_claude
 from config import NIFTY_LOT_SIZE, BANKNIFTY_LOT_SIZE
 
 SIGNAL_TTL_SECONDS = 300
-MIN_SIGNALS_FOR_DECISION = 4
+MIN_SIGNALS_FOR_DECISION = 7
 
 SYSTEM_PROMPT = """You are an expert intraday options trader specializing in Nifty 50 and BankNifty on the NSE.
 

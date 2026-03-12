@@ -104,14 +104,21 @@ class ConsensusOrchestrator(BaseAgent):
         trade_id = f"CONSENSUS-{trade_type}-{uuid.uuid4().hex[:8]}"
         self._log_votes_to_db(trade_id, trade_type, vote_details, underlying, direction, abs(score))
 
-        return self.create_signal(
-            underlying=underlying,
-            direction=direction,
-            confidence=min(1.0, abs(score)),
-            timeframe=trade_type,
-            reasoning=f"Consensus reached for {trade_type}: weighted score={score:.3f} (threshold={self._consensus_threshold}). " +
-                      "; ".join(f"{v['agent_id']}: {v['direction']} w={v['weight']:.2f} ws={v['weighted_score']:.3f}" for v in vote_details),
-            supporting_data={
+        proposal = {
+            "agent_id": self.agent_id,
+            "underlying": underlying,
+            "direction": direction,
+            "confidence": min(1.0, abs(score)),
+            "timeframe": trade_type,
+            "reasoning": (
+                f"Consensus reached for {trade_type}: weighted score={score:.3f} "
+                f"(threshold={self._consensus_threshold}). " +
+                "; ".join(
+                    f"{v['agent_id']}: {v['direction']} w={v['weight']:.2f} ws={v['weighted_score']:.3f}"
+                    for v in vote_details
+                )
+            ),
+            "supporting_data": {
                 "trade_id": trade_id,
                 "trade_type": trade_type,
                 "consensus_score": round(score, 4),
@@ -120,7 +127,14 @@ class ConsensusOrchestrator(BaseAgent):
                 "agents_reporting": len(self._latest_signals),
                 "is_expiry_day": self.is_expiry_day(),
             },
+        }
+
+        await self.publisher.publish_trade_proposal(proposal)
+        self.logger.info(
+            f"Consensus proposal published to trade_proposals: {trade_id} "
+            f"{direction} {underlying} ({trade_type}) score={score:.3f}"
         )
+        return None
 
     def _compute_consensus(self, trade_type: str) -> tuple[float, str, list[dict]] | None:
         weights = WEIGHT_PROFILES.get(trade_type, INTRADAY_WEIGHTS)
