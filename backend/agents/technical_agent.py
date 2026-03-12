@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agents.base_agent import BaseAgent, Signal, IST
+from datetime import time
 
 OHLC_BUFFER_SIZE = 200
 
@@ -133,9 +134,16 @@ class TechnicalAgent(BaseAgent):
             direction = "NEUTRAL"
             confidence = 0.3
 
+        if self.is_expiry_day():
+            now_time = datetime.now(IST).time()
+            if now_time >= time(14, 0):
+                confidence = min(0.95, confidence * 1.2)
+
         reasoning_parts = []
         for tf, result in signals_by_tf.items():
             reasoning_parts.append(f"{tf}: {result['direction']} ({result['confidence']:.2f}) — {result.get('detail', '')}")
+        if self.is_expiry_day():
+            reasoning_parts.append("[EXPIRY DAY: Tighter ranges expected pre-expiry; post-14:00 breakouts more decisive]")
 
         return self.create_signal(
             underlying=underlying,
@@ -143,7 +151,7 @@ class TechnicalAgent(BaseAgent):
             confidence=confidence,
             timeframe="INTRADAY",
             reasoning="; ".join(reasoning_parts),
-            supporting_data=all_details,
+            supporting_data={**all_details, "is_expiry_day": self.is_expiry_day()},
         )
 
     def _analyze_timeframe(self, candles: list[dict], tf: str) -> dict:

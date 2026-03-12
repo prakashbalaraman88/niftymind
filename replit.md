@@ -103,12 +103,14 @@ The Python trading engine handles:
 - `niftymind:economic_calendar` — Upcoming economic events
 - `niftymind:global_macro` — Global indices, crude, DXY, yields, currencies
 
-### Agent Architecture
-- **BaseAgent** (`base_agent.py`): Shared lifecycle with market-hours gate (9:15–15:30 IST), expiry-day detection (Thursday), Redis pub/sub subscription, Signal emission, and graceful shutdown
+### Agent Architecture (LangGraph)
+- **BaseAgent** (`base_agent.py`): LangGraph StateGraph pipeline with nodes: `gate_check` → `process` → `emit`. Includes market-hours gate (9:15–15:30 IST), expiry-day detection (Thursday), Redis pub/sub subscription, Signal emission, and graceful shutdown.
+- **AgentState** (TypedDict): channel, data, should_process, signal, error — flows through the LangGraph graph per message
 - **Signal dataclass**: agent_id, timestamp, underlying, direction (BULLISH/BEARISH/NEUTRAL), confidence (0–1), timeframe (SCALP/INTRADAY/BTST), reasoning, supporting_data
 - **LLM agents** (1, 5, 6, 7): Use Claude API via `llm_utils.query_claude()` for reasoning
 - **Rule-based agents** (2, 3, 4): Pure computation, no LLM calls — optimized for low latency
-- Agent 5 (Sentiment): Subscribes to `fii_dii`, `market_breadth`, `ticks` (VIX); runs market hours + pre-market
+- All agents handle expiry day (Thursday): agents 2-4 adjust confidence/reasoning on Thursdays, agents 5-7 include it in LLM prompts
+- Agent 5 (Sentiment): Subscribes to `fii_dii`, `market_breadth` (including VIX from sentiment_feed); runs market hours + pre-market
 - Agent 6 (News): Subscribes to `news`, `economic_calendar`; runs market hours + pre-market
 - Agent 7 (Macro): Subscribes to `global_macro` (US futures, crude, DXY, US 10Y, USD/INR, gold, Asian indices); runs market hours + pre-market
 

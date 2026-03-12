@@ -4,12 +4,14 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, time, timezone, timedelta
-from typing import Any
+from typing import Any, TypedDict, Annotated
 
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config import REDIS_CHANNELS
+
+from langgraph.graph import StateGraph, END
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -31,6 +33,14 @@ class Signal:
     supporting_data: dict = field(default_factory=dict)
 
 
+class AgentState(TypedDict):
+    channel: str
+    data: dict
+    should_process: bool
+    signal: Signal | None
+    error: str | None
+
+
 class BaseAgent(ABC):
     def __init__(self, agent_id: str, agent_name: str, redis_publisher):
         self.agent_id = agent_id
@@ -40,6 +50,62 @@ class BaseAgent(ABC):
         self._last_signal: Signal | None = None
         self._signal_count = 0
         self._active = False
+        self._graph = self._build_graph()
+
+    def _build_graph(self) -> Any:
+        graph = StateGraph(AgentState)
+
+        graph.add_node("gate_check", self._node_gate_check)
+        graph.add_node("process", self._node_process)
+        graph.add_node("emit", self._node_emit)
+
+        graph.set_entry_point("gate_check")
+        graph.add_conditional_edges(
+            "gate_check",
+            self._route_after_gate,
+            {"process": "process", "skip": END},
+        )
+        graph.add_conditional_edges(
+            "process",
+            self._route_after_process,
+            {"emit": "emit", "done": END},
+        )
+        graph.add_edge("emit", END)
+
+        return graph.compile()
+
+    async def _node_gate_check(self, state: AgentState) -> dict:
+        return {"should_process": self.should_run()}
+
+    def _route_after_gate(self, state: AgentState) -> str:
+        return "process" if state["should_process"] else "skip"
+
+    async def _node_process(self, state: AgentState) -> dict:
+        try:
+            signal = await self.process_message(state["channel"], state["data"])
+            return {"signal": signal, "error": None}
+        except Exception as e:
+            self.logger.error(f"Error in process_message: {e}", exc_info=True)
+            return {"signal": None, "error": str(e)}
+
+    def _route_after_process(self, state: AgentState) -> str:
+        return "emit" if state.get("signal") is not None else "done"
+
+    async def _node_emit(self, state: AgentState) -> dict:
+        signal = state["signal"]
+        if signal:
+            await self.emit_signal(signal)
+        return {}
+
+    async def _invoke_graph(self, channel: str, data: dict):
+        initial_state: AgentState = {
+            "channel": channel,
+            "data": data,
+            "should_process": False,
+            "signal": None,
+            "error": None,
+        }
+        await self._graph.ainvoke(initial_state)
 
     @property
     @abstractmethod
@@ -99,7 +165,7 @@ class BaseAgent(ABC):
 
     async def start(self, shutdown_event: asyncio.Event):
         self._active = True
-        self.logger.info(f"Agent {self.agent_name} starting")
+        self.logger.info(f"Agent {self.agent_name} starting (LangGraph pipeline)")
         await self.emit_status("STARTING")
 
         pubsub = await self.publisher.subscribe(*self.subscribed_channels)
@@ -135,13 +201,11 @@ class BaseAgent(ABC):
                     if isinstance(channel, bytes):
                         channel = channel.decode()
 
-                    signal = await self.process_message(channel, data)
-                    if signal:
-                        await self.emit_signal(signal)
+                    await self._invoke_graph(channel, data)
                 except json.JSONDecodeError:
                     self.logger.warning(f"Non-JSON message received")
                 except Exception as e:
-                    self.logger.error(f"Error processing message: {e}", exc_info=True)
+                    self.logger.error(f"Error in graph execution: {e}", exc_info=True)
 
         except asyncio.CancelledError:
             self.logger.info(f"Agent {self.agent_name} cancelled")

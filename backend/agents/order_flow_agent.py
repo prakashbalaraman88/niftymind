@@ -126,10 +126,15 @@ class OrderFlowAgent(BaseAgent):
                 direction = "BEARISH"
                 confidence = 0.5
 
+        expiry_note = ""
+        if self.is_expiry_day():
+            confidence = min(0.95, confidence * 1.15)
+            expiry_note = " [EXPIRY DAY: Higher volatility expected, flow signals weighted up 15%]"
+
         reasoning = (
             f"Buy pressure: {buy_ratio:.0%}, Sell pressure: {sell_ratio:.0%}. "
             f"Delta: {delta_sum:+}. Bid absorptions: {bid_absorption}, Ask absorptions: {ask_absorption}. "
-            f"Large lots — Buy: {large_buy}, Sell: {large_sell}."
+            f"Large lots — Buy: {large_buy}, Sell: {large_sell}.{expiry_note}"
         )
 
         return self.create_signal(
@@ -147,5 +152,6 @@ class OrderFlowAgent(BaseAgent):
                 "large_lots_buy": large_buy,
                 "large_lots_sell": large_sell,
                 "tick_count": len(ticks),
+                "is_expiry_day": self.is_expiry_day(),
             },
         )

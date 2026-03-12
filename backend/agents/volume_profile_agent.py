@@ -134,12 +134,20 @@ class VolumeProfileAgent(BaseAgent):
             direction = "NEUTRAL"
             confidence = 0.4
 
+        expiry_note = ""
+        if self.is_expiry_day():
+            if not in_value_area:
+                confidence = min(0.95, confidence * 1.1)
+                expiry_note = " [EXPIRY DAY: Price outside value area — breakout more significant on expiry]"
+            else:
+                expiry_note = " [EXPIRY DAY: Mean reversion likely within value area due to pin risk]"
+
         reasoning = (
             f"POC: {poc_price:.1f}, VWAP: {vwap:.1f}, Anchored VWAP: {anchor_vwap:.1f}. "
             f"Value Area: {val:.1f}-{vah:.1f}. Price {'above' if above_poc else 'below'} POC, "
             f"{'above' if above_vwap else 'below'} VWAP. "
             f"HVN count: {len(hvn)}, LVN count: {len(lvn)}. "
-            f"{'Inside' if in_value_area else 'Outside'} value area."
+            f"{'Inside' if in_value_area else 'Outside'} value area.{expiry_note}"
         )
 
         return self.create_signal(
@@ -161,5 +169,6 @@ class VolumeProfileAgent(BaseAgent):
                 "above_poc": above_poc,
                 "above_vwap": above_vwap,
                 "in_value_area": in_value_area,
+                "is_expiry_day": self.is_expiry_day(),
             },
         )
