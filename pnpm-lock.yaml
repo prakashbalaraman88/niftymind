@@ -153,6 +153,10 @@ overrides:
 importers:
 
   .:
+    dependencies:
+      '@replit/connectors-sdk':
+        specifier: ^0.2.0
+        version: 0.2.0
     devDependencies:
       prettier:
         specifier: ^3.8.1
@@ -2185,6 +2189,9 @@ packages:
 
   '@react-navigation/routers@7.5.3':
     resolution: {integrity: sha512-1tJHg4KKRJuQ1/EvJxatrMef3NZXEPzwUIUZ3n1yJ2t7Q97siwRtbynRpQG9/69ebbtiZ8W3ScOZF/OmhvM4Rg==}
+
+  '@replit/connectors-sdk@0.2.0':
+    resolution: {integrity: sha512-hXcrKjTfc+/v0e4Uxo7VLuajyAx/C8xVriRhP/lw/XmeoyRWmHedBhMOApchWLHAQb+UPhDbulpAti1OgGbtxg==}
 
   '@replit/vite-plugin-cartographer@0.5.0':
     resolution: {integrity: sha512-U1LKR78LU0F/nQFRVzaFSH2tX189oFUNsut25KQh24bFN0N9OJEkrCMiJfMBtLXGabjUX4aw2OWJ0u8TjBlxkg==}
@@ -7926,6 +7933,8 @@ snapshots:
   '@react-navigation/routers@7.5.3':
     dependencies:
       nanoid: 3.3.11
+
+  '@replit/connectors-sdk@0.2.0': {}
 
   '@replit/vite-plugin-cartographer@0.5.0':
     dependencies:
