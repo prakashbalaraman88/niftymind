@@ -127,6 +127,9 @@ class KiteExecutor:
         use_bracket = trade_type in ("SCALP", "INTRADAY") and sl_points > 0 and target_points > 0
 
         try:
+            sl_order_id = None
+            target_order_id = None
+
             if use_bracket:
                 order_id = await self._place_bracket_order(
                     trading_symbol=trading_symbol,
@@ -136,20 +139,21 @@ class KiteExecutor:
                     target_points=target_points,
                 )
                 variety = "bo"
+                fill_price = await self._poll_until_filled(order_id, variety)
             else:
-                order_id = await self._place_regular_order_with_sl(
+                order_id, sl_order_id, target_order_id = await self._place_regular_order_with_sl(
                     trading_symbol=trading_symbol,
                     transaction_type=transaction_type,
                     quantity=quantity,
                     product=product,
                     sl_points=sl_points,
+                    target_points=target_points,
                     direction=direction,
                 )
                 variety = "regular"
+                fill_price = await self._poll_until_filled(order_id, variety)
 
             self._order_map[trade_id] = str(order_id)
-
-            fill_price = await self._poll_until_filled(order_id, variety)
 
             if direction == "BULLISH":
                 sl_price = round(fill_price - sl_points, 2)
@@ -171,6 +175,8 @@ class KiteExecutor:
                 "product": product,
                 "trade_type": trade_type,
                 "variety": variety,
+                "sl_order_id": sl_order_id,
+                "target_order_id": target_order_id,
                 "entry_time": datetime.now(IST).isoformat(),
                 "status": "OPEN",
             }
@@ -182,6 +188,14 @@ class KiteExecutor:
                     "sl_child_id": None,
                     "target_child_id": None,
                     "status": "ACTIVE",
+                }
+            elif sl_order_id or target_order_id:
+                self._bracket_orders[trade_id] = {
+                    "parent_order_id": str(order_id),
+                    "sl_child_id": sl_order_id,
+                    "target_child_id": target_order_id,
+                    "status": "ACTIVE",
+                    "variety": "regular_with_exits",
                 }
 
             upsert_trade(
@@ -285,7 +299,8 @@ class KiteExecutor:
 
     async def _place_regular_order_with_sl(self, trading_symbol: str, transaction_type: str,
                                             quantity: int, product: str,
-                                            sl_points: float, direction: str) -> str:
+                                            sl_points: float, target_points: float,
+                                            direction: str) -> tuple[str, str | None, str | None]:
         entry_order_id = await asyncio.to_thread(
             self._kite.place_order,
             variety="regular",
@@ -298,6 +313,9 @@ class KiteExecutor:
         )
 
         fill_price = await self._poll_until_filled(entry_order_id, "regular")
+        exit_type = "SELL" if transaction_type == "BUY" else "BUY"
+        sl_order_id = None
+        target_order_id = None
 
         if fill_price > 0 and sl_points > 0:
             if direction == "BULLISH":
@@ -307,10 +325,8 @@ class KiteExecutor:
                 sl_trigger = round(fill_price + sl_points, 1)
                 sl_limit = round(sl_trigger + 1.0, 1)
 
-            exit_type = "SELL" if transaction_type == "BUY" else "BUY"
-
             try:
-                sl_order_id = await asyncio.to_thread(
+                sl_order_id = str(await asyncio.to_thread(
                     self._kite.place_order,
                     variety="regular",
                     exchange="NFO",
@@ -321,12 +337,34 @@ class KiteExecutor:
                     order_type="SL",
                     trigger_price=sl_trigger,
                     price=sl_limit,
-                )
+                ))
                 logger.info(f"SL order placed: trigger={sl_trigger} limit={sl_limit} order={sl_order_id}")
             except Exception as e:
                 logger.error(f"SL order placement failed: {e}")
 
-        return str(entry_order_id)
+        if fill_price > 0 and target_points > 0:
+            if direction == "BULLISH":
+                target_limit = round(fill_price + target_points, 1)
+            else:
+                target_limit = round(fill_price - target_points, 1)
+
+            try:
+                target_order_id = str(await asyncio.to_thread(
+                    self._kite.place_order,
+                    variety="regular",
+                    exchange="NFO",
+                    tradingsymbol=trading_symbol,
+                    transaction_type=exit_type,
+                    quantity=quantity,
+                    product=product,
+                    order_type="LIMIT",
+                    price=target_limit,
+                ))
+                logger.info(f"Target order placed: limit={target_limit} order={target_order_id}")
+            except Exception as e:
+                logger.error(f"Target order placement failed: {e}")
+
+        return str(entry_order_id), sl_order_id, target_order_id
 
     async def _poll_until_filled(self, order_id: str, variety: str) -> float:
         elapsed = 0.0
@@ -376,42 +414,100 @@ class KiteExecutor:
             if bo["status"] != "ACTIVE":
                 continue
 
-            parent_id = bo["parent_order_id"]
             position = self._positions.get(trade_id)
             if not position:
                 continue
 
-            for order in orders:
-                if str(order.get("parent_order_id", "")) != parent_id:
-                    continue
-                if order.get("status") != "COMPLETE":
-                    continue
+            is_regular_with_exits = bo.get("variety") == "regular_with_exits"
 
-                child_txn = order.get("transaction_type", "")
-                parent_txn = "BUY" if position["direction"] == "BULLISH" else "SELL"
+            if is_regular_with_exits:
+                await self._check_regular_exit_orders(trade_id, bo, position, orders)
+            else:
+                await self._check_bracket_child_orders(trade_id, bo, position, orders)
 
-                if child_txn != parent_txn:
-                    exit_price = float(order.get("average_price", 0))
-                    entry_price = position["entry_price"]
-                    quantity = position["quantity"]
+    async def _check_bracket_child_orders(self, trade_id: str, bo: dict,
+                                           position: dict, orders: list):
+        parent_id = bo["parent_order_id"]
 
-                    if position["direction"] == "BULLISH":
-                        pnl = (exit_price - entry_price) * quantity
-                    else:
-                        pnl = (entry_price - exit_price) * quantity
-                    pnl = round(pnl, 2)
+        for order in orders:
+            if str(order.get("parent_order_id", "")) != parent_id:
+                continue
+            if order.get("status") != "COMPLETE":
+                continue
 
-                    order_tag = order.get("tag", "")
-                    if exit_price <= position.get("sl_price", 0) if position["direction"] == "BULLISH" else exit_price >= position.get("sl_price", 0):
+            child_txn = order.get("transaction_type", "")
+            parent_txn = "BUY" if position["direction"] == "BULLISH" else "SELL"
+
+            if child_txn != parent_txn:
+                exit_price = float(order.get("average_price", 0))
+                entry_price = position["entry_price"]
+                quantity = position["quantity"]
+
+                if position["direction"] == "BULLISH":
+                    pnl = (exit_price - entry_price) * quantity
+                else:
+                    pnl = (entry_price - exit_price) * quantity
+                pnl = round(pnl, 2)
+
+                if position["direction"] == "BULLISH":
+                    if exit_price <= position.get("sl_price", 0):
                         exit_reason = "SL_HIT"
-                    elif exit_price >= position.get("target_price", 0) if position["direction"] == "BULLISH" else exit_price <= position.get("target_price", 0):
+                    elif exit_price >= position.get("target_price", float("inf")):
+                        exit_reason = "TARGET_HIT"
+                    else:
+                        exit_reason = "BRACKET_EXIT"
+                else:
+                    if exit_price >= position.get("sl_price", float("inf")):
+                        exit_reason = "SL_HIT"
+                    elif exit_price <= position.get("target_price", 0):
                         exit_reason = "TARGET_HIT"
                     else:
                         exit_reason = "BRACKET_EXIT"
 
-                    await self._finalize_exit(trade_id, exit_price, pnl, exit_reason, str(order.get("order_id", "")))
-                    bo["status"] = "COMPLETED"
-                    break
+                await self._finalize_exit(trade_id, exit_price, pnl, exit_reason, str(order.get("order_id", "")))
+                bo["status"] = "COMPLETED"
+                break
+
+    async def _check_regular_exit_orders(self, trade_id: str, bo: dict,
+                                          position: dict, orders: list):
+        sl_child = bo.get("sl_child_id")
+        target_child = bo.get("target_child_id")
+        exit_order_ids = {sl_child, target_child} - {None}
+
+        for order in orders:
+            oid = str(order.get("order_id", ""))
+            if oid not in exit_order_ids:
+                continue
+            if order.get("status") != "COMPLETE":
+                continue
+
+            exit_price = float(order.get("average_price", 0))
+            entry_price = position["entry_price"]
+            quantity = position["quantity"]
+
+            if position["direction"] == "BULLISH":
+                pnl = (exit_price - entry_price) * quantity
+            else:
+                pnl = (entry_price - exit_price) * quantity
+            pnl = round(pnl, 2)
+
+            exit_reason = "SL_HIT" if oid == sl_child else "TARGET_HIT"
+
+            other_id = target_child if oid == sl_child else sl_child
+            if other_id:
+                try:
+                    await asyncio.to_thread(
+                        self._kite.cancel_order,
+                        variety="regular",
+                        order_id=other_id,
+                    )
+                    logger.info(f"Cancelled counterpart order {other_id} after {exit_reason}")
+                except Exception as e:
+                    logger.warning(f"Failed to cancel counterpart order {other_id}: {e}")
+
+            await self._finalize_exit(trade_id, exit_price, pnl, exit_reason, oid)
+            bo["status"] = "COMPLETED"
+            break
 
     async def _finalize_exit(self, trade_id: str, exit_price: float, pnl: float,
                               exit_reason: str, exit_order_id: str):
@@ -515,6 +611,21 @@ class KiteExecutor:
                 logger.info(f"Cancelled bracket order {parent_id} for exit")
             except Exception as e:
                 logger.warning(f"Bracket cancel failed, placing manual exit: {e}")
+
+        elif trade_id in self._bracket_orders:
+            bo = self._bracket_orders[trade_id]
+            for child_key in ("sl_child_id", "target_child_id"):
+                child_id = bo.get(child_key)
+                if child_id:
+                    try:
+                        await asyncio.to_thread(
+                            self._kite.cancel_order,
+                            variety="regular",
+                            order_id=child_id,
+                        )
+                        logger.info(f"Cancelled {child_key} order {child_id} for manual exit")
+                    except Exception as e:
+                        logger.warning(f"Failed to cancel {child_key} {child_id}: {e}")
 
         transaction_type = "SELL" if direction == "BULLISH" else "BUY"
 

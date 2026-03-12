@@ -95,7 +95,7 @@ class PositionTracker:
             executor = data.get("executor", "paper")
             variety = data.get("variety", "regular")
 
-            broker_manages_sl_target = (executor == "kite")
+            broker_manages_sl_target = (executor == "kite" and variety == "bo")
 
             if not sl_price:
                 sl_offset = entry_price * 0.02
