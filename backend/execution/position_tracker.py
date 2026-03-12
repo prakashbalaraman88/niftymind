@@ -24,6 +24,7 @@ class PositionTracker:
         self._positions: dict[str, dict] = {}
         self._latest_prices: dict[str, float] = {}
         self._check_interval: float = 2.0
+        self._broker_managed_exits: set[str] = set()
 
     async def start(self, shutdown_event: asyncio.Event):
         logger.info("Position Tracker starting")
@@ -91,6 +92,10 @@ class PositionTracker:
             target_price = data.get("target_price")
             entry_price = float(data.get("price", 0))
             direction = data.get("direction", "BULLISH")
+            executor = data.get("executor", "paper")
+            variety = data.get("variety", "regular")
+
+            broker_manages_sl_target = (executor == "kite")
 
             if not sl_price:
                 sl_offset = entry_price * 0.02
@@ -99,6 +104,9 @@ class PositionTracker:
             if not target_price:
                 target_offset = entry_price * 0.04
                 target_price = (entry_price + target_offset) if direction == "BULLISH" else (entry_price - target_offset)
+
+            if broker_manages_sl_target:
+                self._broker_managed_exits.add(trade_id)
 
             self._positions[trade_id] = {
                 "trade_id": trade_id,
@@ -110,15 +118,17 @@ class PositionTracker:
                 "target_price": round(float(target_price), 2),
                 "trade_type": data.get("trade_type", "INTRADAY"),
                 "entry_time": data.get("timestamp", datetime.now(IST).isoformat()),
+                "executor": executor,
                 "status": "OPEN",
                 "peak_pnl": 0.0,
                 "trough_pnl": 0.0,
             }
-            logger.info(f"Tracking position: {trade_id} SL={sl_price:.2f} Target={target_price:.2f}")
+            logger.info(f"Tracking position: {trade_id} SL={sl_price:.2f} Target={target_price:.2f} broker_managed={broker_manages_sl_target}")
 
-        elif event in ("EXIT", "SL_HIT", "TARGET_HIT", "EOD_CLOSE", "MANUAL"):
+        elif event in ("EXIT", "SL_HIT", "TARGET_HIT", "EOD_CLOSE", "MANUAL", "BRACKET_EXIT"):
             if trade_id in self._positions:
                 del self._positions[trade_id]
+            self._broker_managed_exits.discard(trade_id)
 
     async def _monitor_loop(self, shutdown_event: asyncio.Event):
         while not shutdown_event.is_set():
@@ -143,6 +153,7 @@ class PositionTracker:
             sl_price = pos["sl_price"]
             target_price = pos["target_price"]
             trade_type = pos["trade_type"]
+            is_broker_managed = trade_id in self._broker_managed_exits
 
             if trade_type in ("SCALP", "INTRADAY") and current_time >= EOD_SQUARE_OFF:
                 fallback_price = current_price if current_price is not None else entry_price
@@ -164,6 +175,9 @@ class PositionTracker:
 
             pos["peak_pnl"] = max(pos["peak_pnl"], unrealized)
             pos["trough_pnl"] = min(pos["trough_pnl"], unrealized)
+
+            if is_broker_managed:
+                continue
 
             exit_reason = None
 
