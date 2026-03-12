@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agents.base_agent import BaseAgent, Signal, IST, MARKET_CLOSE
 from agents.llm_utils import query_claude
+from agents import db_logger
 from config import NIFTY_LOT_SIZE, BANKNIFTY_LOT_SIZE
 
 BTST_WINDOW_START = time(14, 30)
@@ -201,4 +202,23 @@ Should we take a BTST position? Respond with JSON."""
 
         await self.publisher.publish_trade_proposal(proposal)
         self.logger.info(f"BTST proposal published to trade_proposals: {trade_id} {direction} {underlying}")
+
+        db_logger.log_audit(
+            event_type="BTST_PROPOSAL",
+            source=self.agent_id,
+            message=result.get("reasoning", "BTST trade proposal")[:500],
+            trade_id=trade_id,
+            agent_id=self.agent_id,
+            details={
+                "trade_id": trade_id,
+                "underlying": underlying,
+                "direction": direction,
+                "confidence": confidence,
+                "trade_type": "BTST",
+                "day_of_week": day_of_week,
+                "expiry_preference": expiry_preference,
+                "signals_count": len(self._latest_signals),
+                "supporting_data": proposal["supporting_data"],
+            },
+        )
         return None

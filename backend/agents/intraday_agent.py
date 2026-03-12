@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agents.base_agent import BaseAgent, Signal, IST
 from agents.llm_utils import query_claude
+from agents import db_logger
 from config import NIFTY_LOT_SIZE, BANKNIFTY_LOT_SIZE
 
 SIGNAL_TTL_SECONDS = 300
@@ -172,4 +173,21 @@ Based on these signals, should we take an intraday options trade? Respond with J
 
         await self.publisher.publish_trade_proposal(proposal)
         self.logger.info(f"Intraday proposal published to trade_proposals: {trade_id} {direction} {underlying}")
+
+        db_logger.log_audit(
+            event_type="INTRADAY_PROPOSAL",
+            source=self.agent_id,
+            message=result.get("reasoning", "Intraday trade proposal")[:500],
+            trade_id=trade_id,
+            agent_id=self.agent_id,
+            details={
+                "trade_id": trade_id,
+                "underlying": underlying,
+                "direction": direction,
+                "confidence": confidence,
+                "trade_type": "INTRADAY",
+                "signals_count": len(self._latest_signals),
+                "supporting_data": proposal["supporting_data"],
+            },
+        )
         return None

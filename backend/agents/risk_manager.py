@@ -107,7 +107,7 @@ class RiskManager(BaseAgent):
             approved = False
 
         lot_size = BANKNIFTY_LOT_SIZE if underlying == "BANKNIFTY" else NIFTY_LOT_SIZE
-        sizing_result = self._calculate_position_size(underlying, sl_points, confidence)
+        sizing_result = self._calculate_position_size(underlying, sl_points, confidence, self._current_vix)
         checks.append(sizing_result["check"])
 
         approved_quantity = sizing_result["quantity"]
@@ -248,7 +248,17 @@ class RiskManager(BaseAgent):
             "detail": f"{count} existing {direction} positions on {underlying} (max 2)",
         }
 
-    def _calculate_position_size(self, underlying: str, sl_points: float, confidence: float) -> dict:
+    def _vix_adjustment_factor(self, vix: float | None) -> float:
+        """Scale down position size as VIX rises above normal baseline of 13.
+        VIX 13 → 1.0x (full size), VIX 20 → 0.65x, VIX 25 → 0.52x, VIX 35+ → 0.37x.
+        Formula: factor = 13 / max(13, vix), clamped to [0.25, 1.0].
+        """
+        if vix is None or vix <= 0:
+            return 1.0
+        return max(0.25, min(1.0, 13.0 / max(13.0, vix)))
+
+    def _calculate_position_size(self, underlying: str, sl_points: float,
+                                  confidence: float, vix: float | None = None) -> dict:
         lot_size = BANKNIFTY_LOT_SIZE if underlying == "BANKNIFTY" else NIFTY_LOT_SIZE
         max_risk_per_trade = self._capital * (self._max_trade_risk_pct / 100)
         remaining_daily = self._max_daily_loss + self._daily_pnl
@@ -258,17 +268,24 @@ class RiskManager(BaseAgent):
         if sl_points <= 0:
             sl_points = 20
 
+        vix_factor = self._vix_adjustment_factor(vix)
+        volatility_adjusted_budget = effective_risk_budget * vix_factor
+
         risk_per_lot = sl_points * lot_size
-        max_lots = max(0, int(effective_risk_budget / risk_per_lot)) if risk_per_lot > 0 else 0
+        max_lots = max(0, int(volatility_adjusted_budget / risk_per_lot)) if risk_per_lot > 0 else 0
 
         confidence_adjusted_lots = max(1, min(max_lots, int(confidence * 3)))
         final_lots = min(confidence_adjusted_lots, max_lots) if max_lots > 0 else 0
         final_qty = final_lots * lot_size
 
+        vix_note = f", VIX={vix:.1f} factor={vix_factor:.2f}" if vix is not None else ", VIX=N/A factor=1.0"
         check = {
             "name": "position_sizing",
             "passed": final_qty > 0,
-            "detail": f"Risk budget ₹{effective_risk_budget:,.0f}, risk/lot ₹{risk_per_lot:,.0f}, lots={final_lots}, qty={final_qty}",
+            "detail": (
+                f"Risk budget ₹{effective_risk_budget:,.0f} → volatility-adjusted ₹{volatility_adjusted_budget:,.0f}"
+                f"{vix_note}, risk/lot ₹{risk_per_lot:,.0f}, lots={final_lots}, qty={final_qty}"
+            ),
         }
 
-        return {"quantity": final_qty, "lots": final_lots, "check": check}
+        return {"quantity": final_qty, "lots": final_lots, "check": check, "vix_factor": vix_factor}

@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agents.base_agent import BaseAgent, Signal, IST
+from agents import db_logger
 from config import NIFTY_LOT_SIZE, BANKNIFTY_LOT_SIZE
 
 SCALP_SIGNAL_TTL_SECONDS = 30
@@ -137,4 +138,20 @@ class ScalpingDecisionAgent(BaseAgent):
 
         await self.publisher.publish_trade_proposal(proposal)
         self.logger.info(f"Scalp proposal published to trade_proposals: {trade_id} {consensus_dir} {underlying}")
+
+        db_logger.log_audit(
+            event_type="SCALP_PROPOSAL",
+            source=self.agent_id,
+            message=proposal["reasoning"][:500],
+            trade_id=trade_id,
+            agent_id=self.agent_id,
+            details={
+                "trade_id": trade_id,
+                "underlying": underlying,
+                "direction": consensus_dir,
+                "confidence": confidence,
+                "trade_type": "SCALP",
+                "supporting_data": proposal["supporting_data"],
+            },
+        )
         return None
