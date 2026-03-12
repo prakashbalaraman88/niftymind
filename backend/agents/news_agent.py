@@ -1,6 +1,5 @@
 import sys
 import os
-import asyncio
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -52,17 +51,16 @@ class NewsAgent(BaseAgent):
     def __init__(self, redis_publisher, anthropic_config=None):
         super().__init__("agent_6_news", "News & Events Specialist", redis_publisher)
         self.anthropic_config = anthropic_config
-        self._news_buffer: list[dict] = []
-        self._last_analysis_time = None
-        self._analysis_interval = 120
+        self._latest_articles: list[dict] = []
+        self._latest_calendar: dict | None = None
         self._avoid_trading_until = None
 
     @property
     def subscribed_channels(self) -> list[str]:
-        return ["ticks"]
+        return ["news", "economic_calendar"]
 
     def should_run(self) -> bool:
-        return True
+        return self.is_market_hours() or self.is_pre_market()
 
     def is_avoid_trading_window(self) -> bool:
         if self._avoid_trading_until is None:
@@ -70,30 +68,44 @@ class NewsAgent(BaseAgent):
         return datetime.now(IST) < self._avoid_trading_until
 
     async def process_message(self, channel: str, data: dict) -> Signal | None:
-        now = datetime.now(IST)
-        if (
-            self._last_analysis_time
-            and (now - self._last_analysis_time).total_seconds() < self._analysis_interval
-        ):
+        if "economic_calendar" in channel:
+            self._latest_calendar = data
             return None
 
-        self._last_analysis_time = now
-        return await self._analyze_news()
+        if "news" in channel:
+            articles = data.get("articles", [])
+            if not articles:
+                return None
+            self._latest_articles = articles
+            return await self._analyze_news(articles)
 
-    async def _analyze_news(self) -> Signal | None:
-        now = datetime.now(IST)
+        return None
 
-        user_msg = f"""Analyze the current news environment for Indian markets.
+    async def _analyze_news(self, articles: list[dict]) -> Signal | None:
+        headlines = "\n".join(
+            f"- [{a.get('source', 'Unknown')}] {a.get('title', '')} — {a.get('description', '')[:150]}"
+            for a in articles[:15]
+        )
 
-Current time (IST): {now.strftime('%Y-%m-%d %H:%M')}
-Day of week: {now.strftime('%A')}
+        calendar_info = ""
+        if self._latest_calendar:
+            events = self._latest_calendar.get("events", [])
+            if events:
+                calendar_info = "\nUpcoming Economic Events:\n" + "\n".join(
+                    f"- {e.get('event', '')} (Impact: {e.get('impact', 'N/A')}, Country: {e.get('country', '')})"
+                    for e in events[:10]
+                )
+
+        user_msg = f"""Analyze these recent financial news headlines for Indian markets:
+
+{headlines}
+{calendar_info}
+
+Current time (IST): {datetime.now(IST).strftime('%Y-%m-%d %H:%M')}
+Day of week: {datetime.now(IST).strftime('%A')}
 Is Expiry Day: {self.is_expiry_day()}
 
-Consider any known upcoming events for today and the current week.
-Check for: RBI policy, Union Budget timing, US Fed decisions, major earnings, geopolitical events.
-
-If there are no major events today, indicate LOW impact with NEUTRAL direction.
-
+Classify the news by market impact and determine overall direction.
 Provide your analysis as JSON."""
 
         try:
@@ -110,7 +122,7 @@ Provide your analysis as JSON."""
 
         if avoid_trading:
             window = int(result.get("avoid_window_minutes", 30))
-            self._avoid_trading_until = now + timedelta(minutes=window)
+            self._avoid_trading_until = datetime.now(IST) + timedelta(minutes=window)
             self.logger.warning(
                 f"AVOID TRADING window set for {window} minutes due to: {reasoning}"
             )
@@ -126,6 +138,7 @@ Provide your analysis as JSON."""
                 "avoid_trading": avoid_trading,
                 "avoid_until": self._avoid_trading_until.isoformat() if self._avoid_trading_until else None,
                 "classified_events": result.get("classified_events", []),
+                "articles_analyzed": len(articles),
                 "is_expiry_day": self.is_expiry_day(),
             },
         )

@@ -76,6 +76,21 @@ class RedisPublisher:
     async def publish_agent_status(self, status: dict):
         await self._publish(CHANNELS["agent_status"], status)
 
+    async def publish_fii_dii(self, data: dict):
+        await self._publish(CHANNELS["fii_dii"], data)
+
+    async def publish_market_breadth(self, data: dict):
+        await self._publish(CHANNELS["market_breadth"], data)
+
+    async def publish_news(self, data: dict):
+        await self._publish(CHANNELS["news"], data)
+
+    async def publish_economic_calendar(self, data: dict):
+        await self._publish(CHANNELS["economic_calendar"], data)
+
+    async def publish_global_macro(self, data: dict):
+        await self._publish(CHANNELS["global_macro"], data)
+
     async def subscribe(self, *channel_keys) -> aioredis.client.PubSub:
         if not self._client:
             raise RuntimeError("Redis client not connected")

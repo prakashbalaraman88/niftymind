@@ -31,9 +31,12 @@ artifacts-monorepo/
 │   ├── main.py             # Entry point — starts data pipeline
 │   ├── config.py           # Configuration from env vars
 │   ├── docker-compose.yml  # TimescaleDB + Redis
-│   ├── data_pipeline/      # TrueData feeds + Redis publisher
+│   ├── data_pipeline/      # Market data feeds + Redis publisher
 │   │   ├── truedata_feed.py
 │   │   ├── options_chain_feed.py
+│   │   ├── sentiment_feed.py    # NSE FII/DII + market breadth
+│   │   ├── news_feed.py         # RSS news + economic calendar
+│   │   ├── global_macro_feed.py # Global indices, crude, DXY, yields
 │   │   └── redis_publisher.py
 │   ├── agents/             # 12 AI agents
 │   │   ├── base_agent.py   # Shared lifecycle: market-hours, Redis, signals
@@ -79,6 +82,13 @@ The Python trading engine handles:
 - 12 AI agents (7 analysis, 3 decision, 2 control)
 - Trade execution (paper + live via Zerodha Kite Connect)
 
+### Data Feeds
+- `truedata_feed.py` — TrueData WebSocket for tick-by-tick and OHLC data
+- `options_chain_feed.py` — TrueData WebSocket for options chain (Greeks, OI)
+- `sentiment_feed.py` — NSE API scraper for FII/DII activity and market breadth (advance/decline)
+- `news_feed.py` — RSS feeds (MoneyControl, ET Markets, LiveMint) + economic calendar
+- `global_macro_feed.py` — Yahoo Finance for global indices, crude, DXY, USD/INR, US 10Y, gold
+
 ### Redis Channels
 - `niftymind:ticks` — Raw tick-by-tick data
 - `niftymind:options_chain` — Options chain snapshots
@@ -87,13 +97,20 @@ The Python trading engine handles:
 - `niftymind:trade_proposals` — Trade proposals from decision agents
 - `niftymind:trade_executions` — Executed trade confirmations
 - `niftymind:agent_status` — Agent health/state updates
+- `niftymind:fii_dii` — FII/DII cash and derivatives activity
+- `niftymind:market_breadth` — Advance/decline ratio, breadth data
+- `niftymind:news` — Classified financial news articles
+- `niftymind:economic_calendar` — Upcoming economic events
+- `niftymind:global_macro` — Global indices, crude, DXY, yields, currencies
 
 ### Agent Architecture
 - **BaseAgent** (`base_agent.py`): Shared lifecycle with market-hours gate (9:15–15:30 IST), expiry-day detection (Thursday), Redis pub/sub subscription, Signal emission, and graceful shutdown
 - **Signal dataclass**: agent_id, timestamp, underlying, direction (BULLISH/BEARISH/NEUTRAL), confidence (0–1), timeframe (SCALP/INTRADAY/BTST), reasoning, supporting_data
 - **LLM agents** (1, 5, 6, 7): Use Claude API via `llm_utils.query_claude()` for reasoning
 - **Rule-based agents** (2, 3, 4): Pure computation, no LLM calls — optimized for low latency
-- Agents 5 (Sentiment), 6 (News), 7 (Macro) also run outside market hours (pre-market/always-on)
+- Agent 5 (Sentiment): Subscribes to `fii_dii`, `market_breadth`, `ticks` (VIX); runs market hours + pre-market
+- Agent 6 (News): Subscribes to `news`, `economic_calendar`; runs market hours + pre-market
+- Agent 7 (Macro): Subscribes to `global_macro` (US futures, crude, DXY, US 10Y, USD/INR, gold, Asian indices); runs market hours + pre-market
 
 ### Configuration (config.py)
 All config loaded from environment variables:

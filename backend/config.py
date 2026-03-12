@@ -167,4 +167,9 @@ REDIS_CHANNELS = {
     "trade_proposals": "niftymind:trade_proposals",
     "trade_executions": "niftymind:trade_executions",
     "agent_status": "niftymind:agent_status",
+    "fii_dii": "niftymind:fii_dii",
+    "market_breadth": "niftymind:market_breadth",
+    "news": "niftymind:news",
+    "economic_calendar": "niftymind:economic_calendar",
+    "global_macro": "niftymind:global_macro",
 }

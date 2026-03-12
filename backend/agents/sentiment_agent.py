@@ -1,6 +1,5 @@
 import sys
 import os
-import asyncio
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -39,29 +38,34 @@ class SentimentAgent(BaseAgent):
         self.anthropic_config = anthropic_config
         self._last_analysis_time = None
         self._analysis_interval = 300
-        self._market_data = {
-            "vix": None,
-            "fii_net": None,
-            "dii_net": None,
-            "advance_decline": None,
-            "sgx_nifty": None,
-        }
+        self._fii_dii_data: dict | None = None
+        self._breadth_data: dict | None = None
+        self._vix_data: dict | None = None
 
     @property
     def subscribed_channels(self) -> list[str]:
-        return ["ticks"]
+        return ["fii_dii", "market_breadth"]
 
     def should_run(self) -> bool:
         return self.is_market_hours() or self.is_pre_market()
 
     async def process_message(self, channel: str, data: dict) -> Signal | None:
-        symbol = data.get("symbol", "").upper()
+        if "fii_dii" in channel:
+            self._fii_dii_data = data
+            return await self._try_analysis()
+        elif "market_breadth" in channel:
+            if data.get("_merge_key") == "vix_data":
+                self._vix_data = {
+                    "ltp": data.get("india_vix"),
+                    "change_pct": data.get("vix_change"),
+                }
+            else:
+                self._breadth_data = data
+            return await self._try_analysis()
 
-        if "VIX" in symbol:
-            self._market_data["vix"] = data.get("ltp")
-        elif "SGX" in symbol or "SGXNIFTY" in symbol:
-            self._market_data["sgx_nifty"] = data.get("ltp")
+        return None
 
+    async def _try_analysis(self) -> Signal | None:
         now = datetime.now(IST)
         if (
             self._last_analysis_time
@@ -69,20 +73,37 @@ class SentimentAgent(BaseAgent):
         ):
             return None
 
-        if self._market_data["vix"] is None:
+        if self._fii_dii_data is None and self._breadth_data is None:
             return None
 
         self._last_analysis_time = now
         return await self._run_analysis()
 
     async def _run_analysis(self) -> Signal | None:
+        fii = self._fii_dii_data or {}
+        breadth = self._breadth_data or {}
+        vix = self._vix_data or {}
+
         user_msg = f"""Analyze current Indian market sentiment:
 
-India VIX: {self._market_data.get('vix', 'N/A')}
-FII Net Activity: {self._market_data.get('fii_net', 'Data pending')}
-DII Net Activity: {self._market_data.get('dii_net', 'Data pending')}
-Advance-Decline Ratio: {self._market_data.get('advance_decline', 'Data pending')}
-SGX Nifty: {self._market_data.get('sgx_nifty', 'N/A')}
+India VIX: {vix.get('ltp', 'N/A')} (Change: {vix.get('change_pct', 'N/A')}%)
+
+FII Activity:
+- FII Buy Value: ₹{fii.get('fii_buy', 'N/A')} Cr
+- FII Sell Value: ₹{fii.get('fii_sell', 'N/A')} Cr
+- FII Net: ₹{fii.get('fii_net', 'N/A')} Cr
+
+DII Activity:
+- DII Buy Value: ₹{fii.get('dii_buy', 'N/A')} Cr
+- DII Sell Value: ₹{fii.get('dii_sell', 'N/A')} Cr
+- DII Net: ₹{fii.get('dii_net', 'N/A')} Cr
+
+Market Breadth:
+- Advances: {breadth.get('advances', 'N/A')}
+- Declines: {breadth.get('declines', 'N/A')}
+- Unchanged: {breadth.get('unchanged', 'N/A')}
+- A/D Ratio: {breadth.get('ad_ratio', 'N/A')}
+
 Is Pre-Market: {self.is_pre_market()}
 Is Expiry Day: {self.is_expiry_day()}
 Current Time (IST): {datetime.now(IST).strftime('%H:%M')}
@@ -106,9 +127,13 @@ Provide your sentiment analysis as JSON."""
             timeframe="INTRADAY",
             reasoning=reasoning,
             supporting_data={
-                "vix": self._market_data.get("vix"),
-                "fii_net": self._market_data.get("fii_net"),
-                "dii_net": self._market_data.get("dii_net"),
+                "vix": vix.get("ltp"),
+                "vix_change_pct": vix.get("change_pct"),
+                "fii_net": fii.get("fii_net"),
+                "dii_net": fii.get("dii_net"),
+                "advances": breadth.get("advances"),
+                "declines": breadth.get("declines"),
+                "ad_ratio": breadth.get("ad_ratio"),
                 "vix_signal": result.get("vix_signal", ""),
                 "institutional_flow": result.get("institutional_flow", ""),
                 "is_pre_market": self.is_pre_market(),

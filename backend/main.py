@@ -39,22 +39,38 @@ async def main():
     from data_pipeline.redis_publisher import RedisPublisher
     from data_pipeline.truedata_feed import TrueDataFeed
     from data_pipeline.options_chain_feed import OptionsChainFeed
+    from data_pipeline.sentiment_feed import SentimentFeed
+    from data_pipeline.news_feed import NewsFeed
+    from data_pipeline.global_macro_feed import GlobalMacroFeed
+
+    from agents import ANALYSIS_AGENTS
 
     publisher = RedisPublisher(config.redis)
     await publisher.connect()
 
     tick_feed = TrueDataFeed(config.truedata, publisher)
     options_feed = OptionsChainFeed(config.truedata, publisher)
+    sentiment_feed = SentimentFeed(publisher)
+    news_feed = NewsFeed(publisher)
+    macro_feed = GlobalMacroFeed(publisher)
 
     tasks = [
         asyncio.create_task(tick_feed.start(config.trading.instruments, shutdown_event)),
         asyncio.create_task(options_feed.start(config.trading.instruments, shutdown_event)),
+        asyncio.create_task(sentiment_feed.start(shutdown_event)),
+        asyncio.create_task(news_feed.start(shutdown_event)),
+        asyncio.create_task(macro_feed.start(shutdown_event)),
     ]
 
-    logger.info("All data pipeline components started")
+    for agent_id, agent_cls in ANALYSIS_AGENTS.items():
+        agent = agent_cls(publisher, anthropic_config=config.anthropic)
+        tasks.append(asyncio.create_task(agent.start(shutdown_event)))
+        logger.info(f"Started agent: {agent.agent_name}")
+
+    logger.info("All data pipeline and analysis agent components started")
     await shutdown_event.wait()
 
-    logger.info("Shutting down data pipeline...")
+    logger.info("Shutting down...")
     for task in tasks:
         task.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)

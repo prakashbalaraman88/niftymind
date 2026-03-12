@@ -1,6 +1,5 @@
 import sys
 import os
-import asyncio
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -14,14 +13,16 @@ You analyze:
 - US market indices (S&P 500, Nasdaq, Dow) — strong correlation with Nifty next-day open
 - Crude oil prices — rising crude is bearish for India (import-dependent), especially BankNifty
 - USD/INR exchange rate — weakening rupee signals FII outflows, bearish for equities
-- Global risk-on vs risk-off signals — bond yields, VIX, gold prices
-- Overnight gap prediction for Nifty based on global cues
-- European markets and Asian markets (Hang Seng, Nikkei) for intraday correlation
+- US Dollar Index (DXY) — rising DXY is risk-off globally
+- US 10Y Treasury yield — yields > 4.5% signal risk-off
+- Gold prices — rising gold indicates risk-off sentiment
+- Asian markets (Hang Seng, Nikkei) for intraday correlation
+- Global risk-on vs risk-off signals
 
 Key correlations:
 - US markets up > 1%: Nifty likely to gap up 0.3-0.5%
 - Crude above $90: Negative for Indian markets
-- DXY (dollar index) rising sharply: FII selling pressure
+- DXY rising sharply: FII selling pressure
 - US 10Y yield > 4.5%: Risk-off globally
 
 For BTST analysis (near market close):
@@ -46,32 +47,17 @@ class MacroAgent(BaseAgent):
         self.anthropic_config = anthropic_config
         self._last_analysis_time = None
         self._analysis_interval = 600
-        self._global_data = {
-            "sp500_futures": None,
-            "nasdaq_futures": None,
-            "crude_oil": None,
-            "usd_inr": None,
-            "gold": None,
-            "us_10y": None,
-            "dxy": None,
-        }
+        self._global_data: dict = {}
 
     @property
     def subscribed_channels(self) -> list[str]:
-        return ["ticks"]
+        return ["global_macro"]
 
     def should_run(self) -> bool:
-        return True
+        return self.is_market_hours() or self.is_pre_market()
 
     async def process_message(self, channel: str, data: dict) -> Signal | None:
-        symbol = data.get("symbol", "").upper()
-
-        if "CRUDE" in symbol or "CL" in symbol:
-            self._global_data["crude_oil"] = data.get("ltp")
-        elif "USDINR" in symbol:
-            self._global_data["usd_inr"] = data.get("ltp")
-        elif "GOLD" in symbol or "GC" in symbol:
-            self._global_data["gold"] = data.get("ltp")
+        self._global_data = data
 
         now = datetime.now(IST)
         if (
@@ -89,6 +75,13 @@ class MacroAgent(BaseAgent):
 
     async def _run_analysis(self, timeframe: str) -> Signal | None:
         now = datetime.now(IST)
+        d = self._global_data
+
+        def _fmt(key: str) -> str:
+            entry = d.get(key)
+            if entry and isinstance(entry, dict):
+                return f"{entry.get('price', 'N/A')} ({entry.get('change_pct', 0):+.2f}%)"
+            return "N/A"
 
         user_msg = f"""Analyze global macro environment for Indian markets:
 
@@ -96,14 +89,17 @@ Current Time (IST): {now.strftime('%Y-%m-%d %H:%M')}
 Analysis Timeframe: {timeframe}
 Is Expiry Day: {self.is_expiry_day()}
 
-Global Data:
-- S&P 500 Futures: {self._global_data.get('sp500_futures', 'N/A')}
-- Nasdaq Futures: {self._global_data.get('nasdaq_futures', 'N/A')}
-- Crude Oil: {self._global_data.get('crude_oil', 'N/A')}
-- USD/INR: {self._global_data.get('usd_inr', 'N/A')}
-- Gold: {self._global_data.get('gold', 'N/A')}
-- US 10Y Yield: {self._global_data.get('us_10y', 'N/A')}
-- DXY (Dollar Index): {self._global_data.get('dxy', 'N/A')}
+Global Market Data:
+- S&P 500 Futures: {_fmt('sp500_futures')}
+- Nasdaq Futures: {_fmt('nasdaq_futures')}
+- Dow Futures: {_fmt('dow_futures')}
+- Crude Oil: {_fmt('crude_oil')}
+- Gold: {_fmt('gold')}
+- US Dollar Index (DXY): {_fmt('dxy')}
+- US 10Y Yield: {_fmt('us_10y')}
+- USD/INR: {_fmt('usd_inr')}
+- Hang Seng: {_fmt('hang_seng')}
+- Nikkei 225: {_fmt('nikkei')}
 
 {'This is an EOD analysis for BTST positioning. Focus on overnight risk and next-day gap prediction.' if timeframe == 'BTST' else 'Focus on intraday macro correlation.'}
 
@@ -119,6 +115,12 @@ Provide your macro analysis as JSON."""
         confidence = float(result.get("confidence", 0.3))
         reasoning = result.get("reasoning", "No reasoning provided")
 
+        sp500 = d.get("sp500_futures", {})
+        crude = d.get("crude_oil", {})
+        usd_inr = d.get("usd_inr", {})
+        dxy = d.get("dxy", {})
+        us_10y = d.get("us_10y", {})
+
         return self.create_signal(
             underlying="NIFTY",
             direction=direction,
@@ -129,8 +131,12 @@ Provide your macro analysis as JSON."""
                 "gap_prediction": result.get("gap_prediction", ""),
                 "key_global_factors": result.get("key_global_factors", []),
                 "risk_level": result.get("risk_level", "MEDIUM"),
-                "crude_oil": self._global_data.get("crude_oil"),
-                "usd_inr": self._global_data.get("usd_inr"),
+                "sp500_change_pct": sp500.get("change_pct") if isinstance(sp500, dict) else None,
+                "crude_oil_price": crude.get("price") if isinstance(crude, dict) else None,
+                "usd_inr_price": usd_inr.get("price") if isinstance(usd_inr, dict) else None,
+                "dxy_price": dxy.get("price") if isinstance(dxy, dict) else None,
+                "dxy_change_pct": dxy.get("change_pct") if isinstance(dxy, dict) else None,
+                "us_10y_yield": us_10y.get("price") if isinstance(us_10y, dict) else None,
                 "is_expiry_day": self.is_expiry_day(),
             },
         )
