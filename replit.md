@@ -226,14 +226,36 @@ Utility scripts package. Each script is a `.ts` file in `src/` with a correspond
 
 ### `artifacts/mobile` (`@workspace/mobile`)
 
-React Native Expo mobile app for NiftyMind. 5-tab layout: Dashboard, Trades, Agents, News, Settings.
+React Native Expo mobile app for NiftyMind. 5-tab layout: Dashboard, Trades, Agents, News, Settings. Full CRED-style dark theme with premium animations.
 
-- **Dashboard** (`app/(tabs)/index.tsx`): Live NIFTY/BANKNIFTY prices via WebSocket ticks, India VIX with halt threshold bar, today's P&L, open positions, 12-agent status grid
-- **Trades** (`app/(tabs)/trades.tsx`): Filterable trade list (All/Open/Closed/Cancelled), expandable detail with entry/SL/target prices, consensus score, per-agent votes with reasoning text
-- **Agents** (`app/(tabs)/agents.tsx`): All 12 agents with latest signal direction, confidence bar, reasoning, staleness indicator, live activity via WebSocket
-- **News** (`app/(tabs)/news.tsx`): SectionList with "Upcoming Events" (sorted by impact then time) and "Market News" (sorted by recency), WebSocket-driven invalidation
-- **Settings** (`app/(tabs)/settings.tsx`): Trading mode toggle (paper/live with PIN modal), instrument selection (NIFTY/BANKNIFTY) persisted to backend, capital & risk parameters with sliders
+**Design System** (`constants/colors.ts`):
+- Pure black background (`#070709`), glassmorphic dark cards (`#1A1C24`), purple accent (`#8B5CF6`), neon green profit (`#10F0A0`), neon red loss (`#FF3B5C`), gold (`#FFB800`)
+- Border: `rgba(255,255,255,0.07)`, glass border: `rgba(255,255,255,0.10)`
+- Gradient definitions for accent, profit, loss, card surfaces
+
+**Animation Utilities** (`lib/animations.ts`): `useEntrance`, `useStaggeredEntrance`, `usePulse`, `useShimmer`, `usePressScale`, `useCountUp`, `useGlow` hooks using React Native Animated API
+
+**Shared Components**:
+- `Card.tsx`: Glassmorphic dark card with press-scale spring animation, optional gradient background and glow shadow
+- `PnlText.tsx`: Animated P&L text with neon glow (textShadow) — green for profit, red for loss
+- `StatusBadge.tsx`: Dark neon badges with impact color coding and border glow
+- `EmptyState.tsx`: Entrance spring animation, gradient icon background, gradient action button
+- `SkeletonLoader.tsx`: Dark shimmer animation (`#1A1C24` ↔ `#22252F`)
+- `Confetti.tsx`: 70-particle celebration system with random colors, shapes, physics (fall + rotation)
+- `AnimatedNumber.tsx`: Smooth number counter with linear interpolation for P&L display
+
+**Tab Bar** (`app/(tabs)/_layout.tsx`): Dark glassmorphic tab bar, animated icon scale + glow background + dot indicator on selection
+
+**Screens**:
+- **Dashboard** (`app/(tabs)/index.tsx`): Header entrance animation, large animated P&L hero (AnimatedNumber), confetti on positive P&L, NIFTY/BANKNIFTY price cards with pulse-on-tick animation, India VIX gradient meter, agent grid with pulsing status dots + staggered entrance, open positions
+- **Trades** (`app/(tabs)/trades.tsx`): Gradient filter pills, slide-in trade rows, green gradient overlay on profitable closed trades, confetti on profitable trade close event from WebSocket
+- **Agents** (`app/(tabs)/agents.tsx`): Gradient icon backgrounds, animated confidence bars (spring from 0), pulsing live dots, staggered entrance for all 12 agent cards
+- **News** (`app/(tabs)/news.tsx`): Slide-in news cards with impact-color borders, gradient icon backgrounds, dark section headers
+- **Settings** (`app/(tabs)/settings.tsx`): Dark form inputs with elevated backgrounds, gradient instrument chips, gradient save button, dark PIN modal with animated entrance, live/paper mode visual indicator
+
+**Metro Config** (`metro.config.js`): `blockList` to exclude Firebase temp directories (prevents watcher crash from partial installs)
+
 - **WebSocket** (`contexts/WebSocketContext.tsx`): Auto-reconnect, ping/pong, per-type subscription pattern, tick state management
 - **Push Notifications** (`lib/notifications.ts`): FCM-backed via expo-notifications. Retrieves FCM device token + Expo push token, registers with backend. Requires: (1) `google-services.json` from Firebase Console placed in `artifacts/mobile/` for Android, (2) EAS project ID set in `app.json` `extra.eas.projectId` for iOS push tokens
 - **API Client** (`lib/api.ts`): Typed fetch client targeting FastAPI backend at `EXPO_PUBLIC_DOMAIN`
-- Depends on: `expo-notifications`, `expo-device`, `expo-haptics`, `@react-native-community/slider`, `@tanstack/react-query`
+- Depends on: `expo-notifications`, `expo-device`, `expo-haptics`, `expo-linear-gradient`, `expo-blur`, `react-native-reanimated`, `@react-native-community/slider`, `@tanstack/react-query`

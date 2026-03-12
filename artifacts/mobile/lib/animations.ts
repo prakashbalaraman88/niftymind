@@ -67,13 +67,13 @@ export function usePulse(active: boolean) {
           Animated.timing(scale, {
             toValue: 1.3,
             duration: 800,
-            easing: Easing.inOut(Easing.sine),
+            easing: Easing.inOut(Easing.sin),
             useNativeDriver: true,
           }),
           Animated.timing(scale, {
             toValue: 1,
             duration: 800,
-            easing: Easing.inOut(Easing.sine),
+            easing: Easing.inOut(Easing.sin),
             useNativeDriver: true,
           }),
         ])
@@ -156,13 +156,13 @@ export function useGlow(intensity = 1) {
         Animated.timing(glow, {
           toValue: intensity,
           duration: 1500,
-          easing: Easing.inOut(Easing.sine),
+          easing: Easing.inOut(Easing.sin),
           useNativeDriver: false,
         }),
         Animated.timing(glow, {
           toValue: 0.3,
           duration: 1500,
-          easing: Easing.inOut(Easing.sine),
+          easing: Easing.inOut(Easing.sin),
           useNativeDriver: false,
         }),
       ])

@@ -1,163 +1,140 @@
 import { BlurView } from "expo-blur";
-import { isLiquidGlassAvailable } from "expo-glass-effect";
 import { Tabs } from "expo-router";
-import { Icon, Label, NativeTabs } from "expo-router/unstable-native-tabs";
-import { SymbolView } from "expo-symbols";
 import { Feather } from "@expo/vector-icons";
-import React from "react";
-import { Platform, StyleSheet, View, useColorScheme } from "react-native";
+import React, { useRef, useEffect } from "react";
+import { Platform, StyleSheet, View, Text, Animated } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
 import colors from "@/constants/colors";
 
-function NativeTabLayout() {
-  return (
-    <NativeTabs>
-      <NativeTabs.Trigger name="index">
-        <Icon sf={{ default: "chart.bar", selected: "chart.bar.fill" }} />
-        <Label>Dashboard</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="trades">
-        <Icon sf={{ default: "list.bullet.rectangle", selected: "list.bullet.rectangle.fill" }} />
-        <Label>Trades</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="agents">
-        <Icon sf={{ default: "cpu", selected: "cpu.fill" }} />
-        <Label>Agents</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="news">
-        <Icon sf={{ default: "newspaper", selected: "newspaper.fill" }} />
-        <Label>News</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="settings">
-        <Icon sf={{ default: "gearshape", selected: "gearshape.fill" }} />
-        <Label>Settings</Label>
-      </NativeTabs.Trigger>
-    </NativeTabs>
-  );
-}
+const C = colors.dark;
 
-function ClassicTabLayout() {
-  const colorScheme = useColorScheme();
-  const safeAreaInsets = useSafeAreaInsets();
-  const isDark = colorScheme === "dark";
-  const isIOS = Platform.OS === "ios";
-  const isWeb = Platform.OS === "web";
+type FeatherName = React.ComponentProps<typeof Feather>["name"];
+
+const TABS: { name: string; title: string; icon: FeatherName }[] = [
+  { name: "index", title: "Dashboard", icon: "bar-chart-2" },
+  { name: "trades", title: "Trades", icon: "list" },
+  { name: "agents", title: "Agents", icon: "cpu" },
+  { name: "news", title: "News", icon: "rss" },
+  { name: "settings", title: "Settings", icon: "sliders" },
+];
+
+function TabIcon({ icon, label, focused }: { icon: FeatherName; label: string; focused: boolean }) {
+  const scale = useRef(new Animated.Value(focused ? 1 : 0.88)).current;
+  const bgOpacity = useRef(new Animated.Value(focused ? 1 : 0)).current;
+  const dotScale = useRef(new Animated.Value(focused ? 1 : 0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(scale, { toValue: focused ? 1 : 0.88, speed: 40, bounciness: 8, useNativeDriver: true }),
+      Animated.timing(bgOpacity, { toValue: focused ? 1 : 0, duration: 200, useNativeDriver: true }),
+      Animated.spring(dotScale, { toValue: focused ? 1 : 0, speed: 50, bounciness: 10, useNativeDriver: true }),
+    ]).start();
+  }, [focused]);
 
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: colors.light.tint,
-        tabBarInactiveTintColor: colors.light.tabIconDefault,
-        headerShown: true,
-        headerStyle: {
-          backgroundColor: colors.light.surface,
-          shadowColor: "transparent",
-          elevation: 0,
-        },
-        headerTitleStyle: {
-          fontFamily: "Inter_600SemiBold",
-          fontSize: 17,
-          color: colors.light.text,
-        },
-        tabBarStyle: {
-          position: "absolute" as const,
-          backgroundColor: isIOS ? "transparent" : isDark ? "#000" : "#fff",
-          borderTopWidth: isWeb ? 1 : 0,
-          borderTopColor: isDark ? "#333" : colors.light.border,
-          elevation: 0,
-          paddingBottom: safeAreaInsets.bottom,
-          ...(isWeb ? { height: 84 } : {}),
-        },
-        tabBarBackground: () =>
-          isIOS ? (
-            <BlurView
-              intensity={100}
-              tint={isDark ? "dark" : "light"}
-              style={StyleSheet.absoluteFill}
-            />
-          ) : isWeb ? (
-            <View
-              style={[
-                StyleSheet.absoluteFill,
-                { backgroundColor: isDark ? "#000" : "#fff" },
-              ]}
-            />
-          ) : null,
-        tabBarLabelStyle: {
-          fontFamily: "Inter_500Medium",
-          fontSize: 10,
-        },
-      }}
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: "Dashboard",
-          headerShown: false,
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="chart.bar" tintColor={color} size={22} />
-            ) : (
-              <Feather name="bar-chart-2" size={20} color={color} />
-            ),
-        }}
-      />
-      <Tabs.Screen
-        name="trades"
-        options={{
-          title: "Trades",
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="list.bullet.rectangle" tintColor={color} size={22} />
-            ) : (
-              <Feather name="list" size={20} color={color} />
-            ),
-        }}
-      />
-      <Tabs.Screen
-        name="agents"
-        options={{
-          title: "Agents",
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="cpu" tintColor={color} size={22} />
-            ) : (
-              <Feather name="cpu" size={20} color={color} />
-            ),
-        }}
-      />
-      <Tabs.Screen
-        name="news"
-        options={{
-          title: "News",
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="newspaper" tintColor={color} size={22} />
-            ) : (
-              <Feather name="rss" size={20} color={color} />
-            ),
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: "Settings",
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="gearshape" tintColor={color} size={22} />
-            ) : (
-              <Feather name="settings" size={20} color={color} />
-            ),
-        }}
-      />
-    </Tabs>
+    <View style={styles.tabItem}>
+      <Animated.View style={[styles.iconWrap, { transform: [{ scale }] }]}>
+        <Animated.View style={[styles.iconBg, { opacity: bgOpacity }]} />
+        <Feather name={icon} size={21} color={focused ? C.accentBright : C.tabInactive} />
+      </Animated.View>
+      <Text style={[styles.tabLabel, { color: focused ? C.accentBright : C.tabInactive }]}>
+        {label}
+      </Text>
+      <Animated.View style={[styles.dot, { transform: [{ scale: dotScale }] }]} />
+    </View>
   );
 }
 
 export default function TabLayout() {
-  if (isLiquidGlassAvailable()) {
-    return <NativeTabLayout />;
-  }
-  return <ClassicTabLayout />;
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: {
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: 64 + insets.bottom,
+          borderTopWidth: 0,
+          backgroundColor: "transparent",
+          elevation: 0,
+        },
+        tabBarBackground: () => (
+          <View style={StyleSheet.absoluteFill}>
+            <View style={[StyleSheet.absoluteFill, {
+              backgroundColor: C.tabBar,
+              borderTopWidth: 1,
+              borderTopColor: C.glassBorder,
+            }]} />
+            {Platform.OS === "ios" && (
+              <BlurView intensity={60} tint="dark" style={StyleSheet.absoluteFill} />
+            )}
+          </View>
+        ),
+        tabBarShowLabel: false,
+      }}
+    >
+      {TABS.map((tab) => (
+        <Tabs.Screen
+          key={tab.name}
+          name={tab.name}
+          options={{
+            tabBarIcon: ({ focused }) => (
+              <TabIcon icon={tab.icon} label={tab.title} focused={focused} />
+            ),
+          }}
+        />
+      ))}
+    </Tabs>
+  );
 }
+
+const styles = StyleSheet.create({
+  tabItem: {
+    alignItems: "center",
+    flex: 1,
+    paddingTop: 8,
+    width: 60,
+  },
+  iconWrap: {
+    position: "relative",
+    marginBottom: 3,
+    width: 36,
+    height: 36,
+    justifyContent: "center",
+    alignItems: "center",
+    borderRadius: 12,
+  },
+  iconBg: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 12,
+    backgroundColor: C.accentLight,
+    shadowColor: C.accentBright,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 10,
+  },
+  tabLabel: {
+    fontSize: 10,
+    fontFamily: "Inter_500Medium",
+    letterSpacing: 0.2,
+  },
+  dot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: C.accentBright,
+    marginTop: 3,
+    shadowColor: C.accentBright,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 6,
+  },
+});
