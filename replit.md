@@ -2,7 +2,7 @@
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+NiftyMind — Multi-Agent AI Options Trading System. A pnpm workspace monorepo (TypeScript) with a Python backend for the trading engine. The system runs 12 specialized AI agents for Nifty 50 and BankNifty options trading.
 
 ## Stack
 
@@ -10,11 +10,16 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **Node.js version**: 24
 - **Package manager**: pnpm
 - **TypeScript version**: 5.9
-- **API framework**: Express 5
+- **API framework**: Express 5 (TypeScript REST/WebSocket API for mobile app)
+- **Trading backend**: Python (FastAPI, LangGraph, Redis, Claude API)
 - **Database**: PostgreSQL + Drizzle ORM
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
+- **Data feed**: TrueData WebSocket API (tick-by-tick, options chain)
+- **Broker**: Zerodha Kite Connect API
+- **AI/LLM**: Anthropic Claude API via LangGraph
+- **Message queue**: Redis Pub/Sub
 
 ## Structure
 
@@ -22,18 +27,64 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 artifacts-monorepo/
 ├── artifacts/              # Deployable applications
 │   └── api-server/         # Express API server
+├── backend/                # Python trading engine
+│   ├── main.py             # Entry point — starts data pipeline
+│   ├── config.py           # Configuration from env vars
+│   ├── docker-compose.yml  # TimescaleDB + Redis
+│   ├── data_pipeline/      # TrueData feeds + Redis publisher
+│   │   ├── truedata_feed.py
+│   │   ├── options_chain_feed.py
+│   │   └── redis_publisher.py
+│   ├── agents/             # 12 AI agents (to be implemented)
+│   ├── execution/          # Paper + live trade executors
+│   └── api/                # FastAPI routes + WebSocket
 ├── lib/                    # Shared libraries
 │   ├── api-spec/           # OpenAPI spec + Orval codegen config
 │   ├── api-client-react/   # Generated React Query hooks
 │   ├── api-zod/            # Generated Zod schemas from OpenAPI
 │   └── db/                 # Drizzle ORM schema + DB connection
-├── scripts/                # Utility scripts (single workspace package)
-│   └── src/                # Individual .ts scripts, run via `pnpm --filter @workspace/scripts run <script>`
-├── pnpm-workspace.yaml     # pnpm workspace (artifacts/*, lib/*, lib/integrations/*, scripts)
-├── tsconfig.base.json      # Shared TS options (composite, bundler resolution, es2022)
-├── tsconfig.json           # Root TS project references
-└── package.json            # Root package with hoisted devDeps
+├── scripts/                # Utility scripts
+├── pnpm-workspace.yaml
+├── tsconfig.base.json
+├── tsconfig.json
+└── package.json
 ```
+
+## Database Schema
+
+Four tables defined in `lib/db/src/schema/`:
+
+- **signals** — Agent analysis signals (direction, confidence, reasoning, supporting data)
+- **trades** — Trade lifecycle (entry/exit prices, P&L, status, consensus score)
+- **agent_votes** — Per-agent vote on each trade (direction, confidence, weight, reasoning)
+- **audit_logs** — System-wide event log (trade decisions, agent state changes, errors)
+
+## Python Backend (backend/)
+
+The Python trading engine handles:
+- Real-time market data ingestion via TrueData WebSocket API
+- Redis Pub/Sub for distributing data to agents
+- 12 AI agents (7 analysis, 3 decision, 2 control)
+- Trade execution (paper + live via Zerodha Kite Connect)
+
+### Redis Channels
+- `niftymind:ticks` — Raw tick-by-tick data
+- `niftymind:options_chain` — Options chain snapshots
+- `niftymind:ohlc:{1m,5m,15m}` — OHLC candles
+- `niftymind:signals` — Agent signals
+- `niftymind:trade_proposals` — Trade proposals from decision agents
+- `niftymind:trade_executions` — Executed trade confirmations
+- `niftymind:agent_status` — Agent health/state updates
+
+### Configuration (config.py)
+All config loaded from environment variables:
+- TrueData credentials: `TRUEDATA_USERNAME`, `TRUEDATA_PASSWORD`
+- Zerodha: `ZERODHA_API_KEY`, `ZERODHA_API_SECRET`, `ZERODHA_ACCESS_TOKEN`
+- Anthropic: `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`
+- Database: `DATABASE_URL`
+- Redis: `REDIS_URL`
+- Trading: `TRADING_MODE` (paper/live), `TRADING_CAPITAL`, `CONSENSUS_THRESHOLD`
+- Risk: `MAX_DAILY_LOSS`, `MAX_TRADE_RISK_PCT`, `MAX_OPEN_POSITIONS`, `VIX_HALT_THRESHOLD`
 
 ## TypeScript & Composite Projects
 
@@ -68,7 +119,10 @@ Database layer using Drizzle ORM with PostgreSQL. Exports a Drizzle client insta
 
 - `src/index.ts` — creates a `Pool` + Drizzle instance, exports schema
 - `src/schema/index.ts` — barrel re-export of all models
-- `src/schema/<modelname>.ts` — table definitions with `drizzle-zod` insert schemas (no models definitions exist right now)
+- `src/schema/signals.ts` — signals table (agent analysis outputs)
+- `src/schema/trades.ts` — trades table (full trade lifecycle)
+- `src/schema/agent_votes.ts` — agent vote records per trade
+- `src/schema/audit_logs.ts` — system event audit trail
 - `drizzle.config.ts` — Drizzle Kit config (requires `DATABASE_URL`, automatically provided by Replit)
 - Exports: `.` (pool, db, schema), `./schema` (schema only)
 
