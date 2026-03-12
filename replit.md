@@ -52,12 +52,15 @@ artifacts-monorepo/
 
 ## Database Schema
 
-Four tables defined in `lib/db/src/schema/`:
+Five tables defined in `lib/db/src/schema/`:
 
-- **signals** — Agent analysis signals (direction, confidence, reasoning, supporting data)
+- **signals** — Agent analysis signals (direction, confidence, reasoning, supporting data) — TimescaleDB hypertable
 - **trades** — Trade lifecycle (entry/exit prices, P&L, status, consensus score)
+- **trade_log** — Complete trade event log with agent votes, consensus scores, risk approval per event — TimescaleDB hypertable
 - **agent_votes** — Per-agent vote on each trade (direction, confidence, weight, reasoning)
-- **audit_logs** — System-wide event log (trade decisions, agent state changes, errors)
+- **audit_logs** — System-wide event log (trade decisions, agent state changes, errors) — TimescaleDB hypertable
+
+TimescaleDB setup: `python backend/setup_timescaledb.py` (requires TimescaleDB extension in Postgres; docker-compose provides it)
 
 ## Python Backend (backend/)
 
