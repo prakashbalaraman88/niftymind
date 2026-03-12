@@ -102,7 +102,7 @@ export default function AgentsScreen() {
             <Card key={id} style={isStale ? { ...styles.agentCard, ...styles.staleCard } : styles.agentCard}>
               <View style={styles.agentHeader}>
                 <View style={styles.agentIconWrap}>
-                  <Feather name={info.icon as any} size={18} color={colors.light.tint} />
+                  <Feather name={info.icon} size={18} color={colors.light.tint} />
                 </View>
                 <View style={styles.agentInfo}>
                   <Text style={styles.agentName}>{info.name}</Text>

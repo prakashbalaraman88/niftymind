@@ -66,6 +66,9 @@ export const api = {
 
   updateSettings: (data: Record<string, unknown>) =>
     postJson<{ status: string; applied: Record<string, unknown> }>("/settings", data),
+
+  registerPushToken: (token: string) =>
+    postJson<{ status: string }>("/push-token", { token }),
 };
 
 export const getWsUrl = (): string => {

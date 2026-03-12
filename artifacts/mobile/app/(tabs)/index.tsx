@@ -228,7 +228,7 @@ function AgentCell({ agentId }: { agentId: string }) {
   return (
     <View style={styles.agentCell}>
       <View style={[styles.agentDot, { backgroundColor: active ? colors.light.green : "#D1D5DB" }]} />
-      <Feather name={info?.icon as any || "cpu"} size={16} color={dirColor} />
+      <Feather name={info?.icon ?? "cpu"} size={16} color={dirColor} />
       <Text style={styles.agentName} numberOfLines={1}>{info?.shortName || agentId}</Text>
       <Text style={[styles.agentSignal, { color: dirColor }]} numberOfLines={1}>
         {signal === "--" ? "--" : signal.substring(0, 4)}

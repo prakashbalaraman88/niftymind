@@ -1,6 +1,8 @@
 import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
+import Constants from "expo-constants";
+import { api } from "./api";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -45,7 +47,18 @@ export async function registerForPushNotifications(): Promise<string | null> {
   }
 
   try {
-    const token = (await Notifications.getExpoPushTokenAsync()).data;
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+    const tokenData = await Notifications.getExpoPushTokenAsync({
+      projectId: projectId ?? undefined,
+    });
+    const token = tokenData.data;
+
+    try {
+      await api.registerPushToken(token);
+    } catch {
+      // Server may not support push token registration yet
+    }
+
     return token;
   } catch {
     return null;
@@ -64,10 +77,10 @@ export async function fireTradeNotification(data: Record<string, unknown>) {
 
   if (action === "EXIT_ORDER" || action === "EXIT" || data.exit_price) {
     const pnlStr = pnl != null ? ` | P&L: \u20B9${pnl.toLocaleString("en-IN")}` : "";
-    title = `\u{1F534} Position Closed: ${symbol}`;
+    title = "Position Closed: " + symbol;
     body = `Exit @ \u20B9${price}${pnlStr}`;
   } else {
-    title = `\u{1F7E2} Trade Executed: ${symbol}`;
+    title = "Trade Executed: " + symbol;
     body = `${direction} @ \u20B9${price}`;
   }
 
@@ -88,7 +101,7 @@ export async function fireRiskNotification(data: Record<string, unknown>) {
 
   await Notifications.scheduleNotificationAsync({
     content: {
-      title: "\u26A0\uFE0F Risk Alert",
+      title: "Risk Alert",
       body: detail ? `${event}: ${detail}` : event,
       sound: "default",
       ...(Platform.OS === "android" ? { channelId: "risk" } : {}),

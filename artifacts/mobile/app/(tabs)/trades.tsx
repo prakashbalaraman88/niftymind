@@ -210,7 +210,7 @@ function VoteRow({ vote }: { vote: AgentVote }) {
     <View style={styles.voteRow}>
       <View style={styles.voteTop}>
         <View style={styles.voteLeft}>
-          <Feather name={info?.icon as any || "cpu"} size={14} color={dirColor} />
+          <Feather name={info?.icon ?? "cpu"} size={14} color={dirColor} />
           <Text style={styles.voteName}>{info?.name || vote.agent_id}</Text>
         </View>
         <View style={styles.voteRight}>

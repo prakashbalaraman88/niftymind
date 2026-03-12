@@ -1,4 +1,15 @@
-export const AGENT_INFO: Record<string, { name: string; shortName: string; icon: string }> = {
+import type { ComponentProps } from "react";
+import type { Feather } from "@expo/vector-icons";
+
+type FeatherIcon = ComponentProps<typeof Feather>["name"];
+
+interface AgentInfo {
+  name: string;
+  shortName: string;
+  icon: FeatherIcon;
+}
+
+export const AGENT_INFO: Record<string, AgentInfo> = {
   agent_1: { name: "Trend Follower", shortName: "Trend", icon: "trending-up" },
   agent_2: { name: "Mean Reversion", shortName: "Revert", icon: "refresh-cw" },
   agent_3: { name: "Volatility Analyzer", shortName: "Vol", icon: "activity" },
