@@ -41,13 +41,19 @@ artifacts-monorepo/
 │   ├── agents/             # 12 AI agents
 │   │   ├── base_agent.py   # Shared lifecycle: market-hours, Redis, signals
 │   │   ├── llm_utils.py    # Claude API helper (query_claude)
-│   │   ├── options_chain_agent.py  # Agent 1: Options chain analysis
-│   │   ├── order_flow_agent.py     # Agent 2: Order flow (rule-based)
-│   │   ├── volume_profile_agent.py # Agent 3: Volume profile (rule-based)
-│   │   ├── technical_agent.py      # Agent 4: Multi-TF technical (rule-based)
-│   │   ├── sentiment_agent.py      # Agent 5: Market sentiment (LLM)
-│   │   ├── news_agent.py           # Agent 6: News & events (LLM)
-│   │   └── macro_agent.py          # Agent 7: Global macro (LLM)
+│   │   ├── options_chain_agent.py      # Agent 1: Options chain analysis (LLM)
+│   │   ├── order_flow_agent.py         # Agent 2: Order flow (rule-based)
+│   │   ├── volume_profile_agent.py     # Agent 3: Volume profile (rule-based)
+│   │   ├── technical_agent.py          # Agent 4: Multi-TF technical (rule-based)
+│   │   ├── sentiment_agent.py          # Agent 5: Market sentiment (LLM)
+│   │   ├── news_agent.py              # Agent 6: News & events (LLM)
+│   │   ├── macro_agent.py             # Agent 7: Global macro (LLM)
+│   │   ├── scalping_agent.py          # Agent 8: Scalp decision (rule-based)
+│   │   ├── intraday_agent.py          # Agent 9: Intraday decision (LLM)
+│   │   ├── btst_agent.py             # Agent 10: BTST decision (LLM)
+│   │   ├── risk_manager.py           # Agent 11: Risk validation + veto
+│   │   ├── consensus_orchestrator.py  # Agent 12: Weighted vote aggregation
+│   │   └── db_logger.py              # PostgreSQL persistence helpers
 │   ├── execution/          # Paper + live trade executors
 │   └── api/                # FastAPI routes + WebSocket
 ├── lib/                    # Shared libraries
@@ -113,6 +119,19 @@ The Python trading engine handles:
 - Agent 5 (Sentiment): Subscribes to `fii_dii`, `market_breadth` (including VIX from sentiment_feed); runs market hours + pre-market
 - Agent 6 (News): Subscribes to `news`, `economic_calendar`; runs market hours + pre-market
 - Agent 7 (Macro): Subscribes to `global_macro` (US futures, crude, DXY, US 10Y, USD/INR, gold, Asian indices); runs market hours + pre-market
+- Agent 8 (Scalping Decision): Rule-based, subscribes to `signals`, requires alignment from agents 1-3 (options, order flow, volume)
+- Agent 9 (Intraday Decision): LLM-powered, subscribes to `signals`, buffers all 7 analysis signals, proposes intraday options trades
+- Agent 10 (BTST Decision): LLM-powered, subscribes to `signals`, runs 14:30-15:25 IST only, proposes overnight positions
+- Agent 11 (Risk Manager): Subscribes to `trade_proposals`, `trade_executions`, `market_breadth`; validates against daily loss, open positions, VIX halt, correlation, position sizing; approves or vetoes
+- Agent 12 (Consensus Orchestrator): Subscribes to `signals`, aggregates weighted votes per trade type (SCALP/INTRADAY/BTST) with configurable weights, fires proposal when score > threshold
+
+### Decision Pipeline
+```
+Analysis Signals (1-7) → Consensus Orchestrator (12) → Decision Agents (8-10) → Risk Manager (11) → Trade Executions
+```
+- Consensus weights per trade type: SCALP emphasizes order flow (0.35) + options (0.25), INTRADAY balanced across all 7, BTST emphasizes macro (0.25) + sentiment (0.25)
+- Risk Manager checks: daily loss limit, open position count, VIX halt, correlation risk, capital-at-risk, volatility-adjusted position sizing
+- All votes and decisions persisted to PostgreSQL via db_logger.py (agent_votes, trade_log, audit_logs tables)
 
 ### Configuration (config.py)
 All config loaded from environment variables:

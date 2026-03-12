@@ -43,7 +43,9 @@ async def main():
     from data_pipeline.news_feed import NewsFeed
     from data_pipeline.global_macro_feed import GlobalMacroFeed
 
-    from agents import ANALYSIS_AGENTS
+    from agents import ANALYSIS_AGENTS, DECISION_AGENTS, CONTROL_AGENTS
+    from agents.risk_manager import RiskManager
+    from agents.consensus_orchestrator import ConsensusOrchestrator
 
     publisher = RedisPublisher(config.redis)
     await publisher.connect()
@@ -65,9 +67,30 @@ async def main():
     for agent_id, agent_cls in ANALYSIS_AGENTS.items():
         agent = agent_cls(publisher, anthropic_config=config.anthropic)
         tasks.append(asyncio.create_task(agent.start(shutdown_event)))
-        logger.info(f"Started agent: {agent.agent_name}")
+        logger.info(f"Started analysis agent: {agent.agent_name}")
 
-    logger.info("All data pipeline and analysis agent components started")
+    for agent_id, agent_cls in DECISION_AGENTS.items():
+        agent = agent_cls(publisher, anthropic_config=config.anthropic)
+        tasks.append(asyncio.create_task(agent.start(shutdown_event)))
+        logger.info(f"Started decision agent: {agent.agent_name}")
+
+    consensus = ConsensusOrchestrator(
+        publisher,
+        anthropic_config=config.anthropic,
+        consensus_threshold=config.trading.consensus_threshold,
+    )
+    tasks.append(asyncio.create_task(consensus.start(shutdown_event)))
+    logger.info(f"Started control agent: {consensus.agent_name}")
+
+    risk_mgr = RiskManager(
+        publisher,
+        anthropic_config=config.anthropic,
+        risk_config=config.risk,
+    )
+    tasks.append(asyncio.create_task(risk_mgr.start(shutdown_event)))
+    logger.info(f"Started control agent: {risk_mgr.agent_name}")
+
+    logger.info("All 12 agents and data pipeline started")
     await shutdown_event.wait()
 
     logger.info("Shutting down...")
