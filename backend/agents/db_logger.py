@@ -111,7 +111,11 @@ def insert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
                  quantity: int, trade_type: str, consensus_score: float,
                  entry_price: float | None = None,
                  sl_price: float | None = None,
-                 target_price: float | None = None):
+                 target_price: float | None = None,
+                 status: str = "PROPOSED"):
+    """Insert a trade row. Uses ON CONFLICT DO NOTHING so callers can safely call
+    this for proposals regardless of whether a row already exists (e.g., created
+    by ConsensusOrchestrator earlier in the pipeline)."""
     conn = _get_conn()
     if not conn:
         return
@@ -121,9 +125,10 @@ def insert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
             """INSERT INTO trades (id, trade_id, symbol, underlying, direction,
                entry_price, sl_price, target_price, quantity, status,
                consensus_score, trade_type, created_at, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (trade_id) DO NOTHING""",
             (str(uuid.uuid4()), trade_id, symbol, underlying, direction,
-             entry_price, sl_price, target_price, quantity, "PROPOSED",
+             entry_price, sl_price, target_price, quantity, status,
              consensus_score, trade_type, datetime.now(IST), datetime.now(IST)),
         )
         conn.commit()

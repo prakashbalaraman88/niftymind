@@ -129,6 +129,19 @@ class RiskManager(BaseAgent):
         check_summary = "; ".join(f"{c['name']}: {'PASS' if c['passed'] else 'FAIL'} — {c['detail']}" for c in checks)
         reasoning = f"Risk Manager {verdict}: {check_summary}"
 
+        db_logger.insert_trade(
+            trade_id=trade_id,
+            symbol=f"{underlying} {data.get('supporting_data', {}).get('option_type', 'CE')}",
+            underlying=underlying,
+            direction=direction,
+            quantity=approved_quantity if approved else 0,
+            trade_type=trade_type,
+            consensus_score=confidence,
+            sl_price=None,
+            target_price=None,
+            status=verdict,
+        )
+
         db_logger.log_trade_event(
             trade_id=trade_id,
             event=f"RISK_{verdict}",
@@ -143,6 +156,7 @@ class RiskManager(BaseAgent):
                 "open_positions": len(self._open_positions),
                 "current_vix": self._current_vix,
                 "approved_quantity": approved_quantity,
+                "vix_factor": sizing_result.get("vix_factor", 1.0),
             },
         )
 
@@ -163,18 +177,6 @@ class RiskManager(BaseAgent):
             approved_data["supporting_data"]["risk_reasoning"] = reasoning
             approved_data["supporting_data"]["approved_quantity"] = approved_quantity
             approved_data["supporting_data"]["risk_checks"] = checks
-
-            db_logger.insert_trade(
-                trade_id=trade_id,
-                symbol=f"{underlying} {data.get('supporting_data', {}).get('option_type', 'CE')}",
-                underlying=underlying,
-                direction=direction,
-                quantity=approved_quantity,
-                trade_type=trade_type,
-                consensus_score=confidence,
-                sl_price=None,
-                target_price=None,
-            )
 
             await self.publisher.publish_trade_execution({
                 "event": "RISK_APPROVED",
