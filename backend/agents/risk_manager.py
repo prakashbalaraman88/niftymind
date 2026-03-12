@@ -192,6 +192,17 @@ class RiskManager(BaseAgent):
 
             self.logger.info(f"APPROVED trade {trade_id}: {direction} {underlying} x{approved_quantity}")
         else:
+            await self.publisher.publish_trade_execution({
+                "event": "RISK_VETOED",
+                "trade_id": trade_id,
+                "trade_type": trade_type,
+                "underlying": underlying,
+                "direction": direction,
+                "quantity": 0,
+                "confidence": confidence,
+                "risk_reasoning": reasoning,
+                "timestamp": datetime.now(IST).isoformat(),
+            })
             self.logger.warning(f"VETOED trade {trade_id}: {reasoning[:200]}")
 
         return self.create_signal(

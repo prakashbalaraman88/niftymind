@@ -76,6 +76,7 @@ class ConsensusOrchestrator(BaseAgent):
 
         best_consensus = None
         best_score = 0.0
+        all_evaluations: list[tuple[str, float, str, list[dict]]] = []
 
         for trade_type in ("SCALP", "INTRADAY", "BTST"):
             result = self._compute_consensus(trade_type)
@@ -83,9 +84,31 @@ class ConsensusOrchestrator(BaseAgent):
                 continue
 
             score, direction, vote_details = result
+            all_evaluations.append((trade_type, score, direction, vote_details))
+
             if abs(score) > abs(best_score) and abs(score) >= self._consensus_threshold:
                 best_score = score
                 best_consensus = (trade_type, score, direction, vote_details)
+
+        if all_evaluations and best_consensus is None:
+            sub_threshold = [
+                f"{tt}: {dir_} score={sc:.3f}"
+                for tt, sc, dir_, _ in all_evaluations
+            ]
+            db_logger.log_audit(
+                event_type="CONSENSUS_SUB_THRESHOLD",
+                source=self.agent_id,
+                message=f"All scores below threshold {self._consensus_threshold}: " + "; ".join(sub_threshold),
+                agent_id=self.agent_id,
+                details={
+                    "threshold": self._consensus_threshold,
+                    "evaluations": [
+                        {"trade_type": tt, "score": round(sc, 4), "direction": dir_,
+                         "agents_reporting": len(self._latest_signals)}
+                        for tt, sc, dir_, _ in all_evaluations
+                    ],
+                },
+            )
 
         if best_consensus is None:
             return None
