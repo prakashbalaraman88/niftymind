@@ -19,6 +19,7 @@ import {
   registerForPushNotifications,
   fireTradeNotification,
   fireRiskNotification,
+  addNotificationResponseListener,
 } from "@/lib/notifications";
 
 SplashScreen.preventAutoHideAsync();
@@ -41,6 +42,13 @@ function NotificationWatcher({ children }: { children: React.ReactNode }) {
       registeredRef.current = true;
       registerForPushNotifications();
     }
+  }, []);
+
+  useEffect(() => {
+    const responseSubscription = addNotificationResponseListener(() => {
+      // notification tap handled — could navigate to trades tab
+    });
+    return () => responseSubscription.remove();
   }, []);
 
   useEffect(() => {
