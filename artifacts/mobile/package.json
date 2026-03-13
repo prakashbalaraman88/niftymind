@@ -4,12 +4,13 @@
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
-    "dev": "EXPO_OFFLINE=1 pnpm exec expo start --port ${PORT:-8082} --web",
+    "dev": "cross-env EXPO_OFFLINE=1 pnpm exec expo start --port 8082 --web",
     "build": "node scripts/build.js",
     "serve": "node server/serve.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
+    "cross-env": "catalog:",
     "@babel/core": "^7.25.2",
     "@expo-google-fonts/inter": "^0.4.0",
     "@expo/cli": "54.0.23",
