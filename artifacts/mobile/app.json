@@ -31,7 +31,7 @@
       [
         "expo-router",
         {
-          "origin": "https://replit.com/"
+          "origin": "http://localhost"
         }
       ],
       "expo-font",

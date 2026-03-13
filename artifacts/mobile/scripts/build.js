@@ -55,22 +55,11 @@ function stripProtocol(domain) {
 }
 
 function getDeploymentDomain() {
-  if (process.env.REPLIT_INTERNAL_APP_DOMAIN) {
-    return stripProtocol(process.env.REPLIT_INTERNAL_APP_DOMAIN);
-  }
-
-  if (process.env.REPLIT_DEV_DOMAIN) {
-    return stripProtocol(process.env.REPLIT_DEV_DOMAIN);
-  }
-
   if (process.env.EXPO_PUBLIC_DOMAIN) {
     return stripProtocol(process.env.EXPO_PUBLIC_DOMAIN);
   }
 
-  console.error(
-    "ERROR: No deployment domain found. Set REPLIT_INTERNAL_APP_DOMAIN, REPLIT_DEV_DOMAIN, or EXPO_PUBLIC_DOMAIN",
-  );
-  process.exit(1);
+  return `localhost:${process.env.PORT || 8082}`;
 }
 
 function prepareDirectories(timestamp) {
@@ -124,7 +113,7 @@ async function checkMetroHealth() {
 }
 
 function getExpoPublicReplId() {
-  return process.env.REPL_ID || process.env.EXPO_PUBLIC_REPL_ID;
+  return process.env.EXPO_PUBLIC_REPL_ID || "local";
 }
 
 async function startMetro(expoPublicDomain, expoPublicReplId) {
@@ -512,7 +501,7 @@ async function main() {
 
   const domain = getDeploymentDomain();
   const expoPublicReplId = getExpoPublicReplId();
-  const baseUrl = `https://${domain}`;
+  const baseUrl = domain.startsWith("localhost") ? `http://${domain}` : `https://${domain}`;
   const timestamp = `${Date.now()}-${process.pid}`;
 
   prepareDirectories(timestamp);
