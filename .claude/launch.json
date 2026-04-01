@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mobile-web",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "dist", "-l", "8081", "-s"],
+      "port": 8081,
+      "cwd": "artifacts/mobile"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npm install:*)",
+      "Bash(pnpm install:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(pnpm exec:*)",
+      "Bash(npx expo:*)",
+      "Bash(taskkill //F //IM \"node.exe\" //FI \"WINDOWTITLE eq *expo*\")",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //F //PID 6848)",
+      "Bash(grep -r \"system_prompt\\\\|SYSTEM_PROMPT\\\\|system prompt\" 'D:\\\\Claude Projects\\\\niftymind-main' --include=*.py --include=*.ts --include=*.tsx)"
+    ]
+  }
+}

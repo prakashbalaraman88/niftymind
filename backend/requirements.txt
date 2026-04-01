@@ -1,0 +1,31 @@
+# Core
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+websockets==14.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# Database
+psycopg2-binary==2.9.10
+sqlalchemy==2.0.36
+
+# Redis
+redis==5.2.1
+
+# HTTP clients
+httpx==0.28.1
+aiohttp==3.11.11
+
+# AI / LLM
+google-genai>=1.0.0
+langgraph==0.2.60
+
+# Data & ML
+numpy==2.2.1
+pandas==2.2.3
+scikit-learn>=1.4.0
+yfinance>=0.2.36
+
+# Market data (optional - needs TrueData credentials)
+# truedata==7.0.1
