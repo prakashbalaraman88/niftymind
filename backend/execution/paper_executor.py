@@ -291,7 +291,7 @@ class PaperExecutor:
                 "exit_price": exit_price,
                 "pnl": pnl,
                 "exit_reason": exit_reason,
-                "trade_type": self._open_positions.get(trade_id, {}).get("trade_type", "INTRADAY"),
+                "trade_type": self._positions.get(trade_id, {}).get("trade_type", "INTRADAY"),
                 "market_regime": "NORMAL",
                 "timestamp": datetime.now(IST).isoformat(),
             })

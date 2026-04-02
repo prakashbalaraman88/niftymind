@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, time, timezone, timedelta
@@ -176,7 +177,9 @@ class BaseAgent(ABC):
                 if not self.should_run():
                     await self.emit_status("WAITING_FOR_MARKET")
                     try:
-                        await asyncio.wait_for(shutdown_event.wait(), timeout=30.0)
+                        # Jitter prevents all 12 agents firing simultaneously
+                        jitter = random.uniform(0, 8)
+                        await asyncio.wait_for(shutdown_event.wait(), timeout=30.0 + jitter)
                         break
                     except asyncio.TimeoutError:
                         continue

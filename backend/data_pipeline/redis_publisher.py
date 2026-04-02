@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import sys
@@ -12,21 +13,56 @@ from config import REDIS_CHANNELS as CHANNELS
 logger = logging.getLogger("niftymind.redis_publisher")
 
 
+class _SubscriberHandle:
+    """Drop-in replacement for PubSub that reads from a shared multiplexer."""
+
+    def __init__(self):
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+
+    async def get_message(self, ignore_subscribe_messages: bool = True, timeout: float = 0):
+        try:
+            return self._queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+
+    async def unsubscribe(self, *args):
+        pass  # cleanup handled by RedisPublisher._remove_subscriber
+
+    async def aclose(self):
+        pass
+
+
 class RedisPublisher:
     def __init__(self, redis_config):
         self._config = redis_config
         self._client: aioredis.Redis | None = None
+        # Shared PubSub multiplexer state
+        self._shared_pubsub: aioredis.client.PubSub | None = None
+        self._subscribed_channels: set[str] = set()
+        self._subscribers: dict[str, list[_SubscriberHandle]] = {}  # channel -> handles
+        self._dispatcher_task: asyncio.Task | None = None
+        self._mux_lock = asyncio.Lock()
 
     async def connect(self):
         self._client = aioredis.from_url(
             self._config.url,
             decode_responses=True,
-            max_connections=20,
+            max_connections=3,
+            socket_connect_timeout=5,
+            socket_timeout=5,
         )
         await self._client.ping()
         logger.info(f"Redis publisher connected to {self._config.url}")
 
     async def disconnect(self):
+        if self._dispatcher_task:
+            self._dispatcher_task.cancel()
+            try:
+                await self._dispatcher_task
+            except asyncio.CancelledError:
+                pass
+        if self._shared_pubsub:
+            await self._shared_pubsub.aclose()
         if self._client:
             await self._client.aclose()
             logger.info("Redis publisher disconnected")
@@ -91,12 +127,67 @@ class RedisPublisher:
     async def publish_global_macro(self, data: dict):
         await self._publish(CHANNELS["global_macro"], data)
 
-    async def subscribe(self, *channel_keys) -> aioredis.client.PubSub:
+    async def publish_depth(self, snapshot) -> None:
+        data = asdict(snapshot) if hasattr(snapshot, "__dataclass_fields__") else snapshot
+        await self._publish(CHANNELS["depth"], data)
+
+    async def subscribe(self, *channel_keys) -> _SubscriberHandle:
+        """Return a lightweight handle sharing ONE PubSub connection."""
         if not self._client:
             raise RuntimeError("Redis client not connected")
-        pubsub = self._client.pubsub()
+
+        handle = _SubscriberHandle()
         channels = [CHANNELS[k] for k in channel_keys if k in CHANNELS]
-        if channels:
-            await pubsub.subscribe(*channels)
-            logger.info(f"Subscribed to Redis channels: {channels}")
-        return pubsub
+
+        async with self._mux_lock:
+            # Lazily create shared PubSub
+            if self._shared_pubsub is None:
+                self._shared_pubsub = self._client.pubsub()
+
+            # Register handle for each channel
+            new_channels = []
+            for ch in channels:
+                if ch not in self._subscribers:
+                    self._subscribers[ch] = []
+                    new_channels.append(ch)
+                self._subscribers[ch].append(handle)
+
+            # Subscribe only to genuinely new channels
+            if new_channels:
+                await self._shared_pubsub.subscribe(*new_channels)
+                self._subscribed_channels.update(new_channels)
+                logger.info(f"Shared PubSub subscribed to new channels: {new_channels}")
+
+            # Start dispatcher if not running
+            if self._dispatcher_task is None or self._dispatcher_task.done():
+                self._dispatcher_task = asyncio.create_task(self._dispatch_loop())
+
+        logger.info(f"Subscriber registered for channels: {channels} (total connections: 1 shared)")
+        return handle
+
+    async def _dispatch_loop(self):
+        """Single loop reading the shared PubSub and fanning out to handles."""
+        try:
+            while True:
+                if self._shared_pubsub is None:
+                    break
+                msg = await self._shared_pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0,
+                )
+                if msg is None or msg["type"] != "message":
+                    await asyncio.sleep(0.01)
+                    continue
+
+                channel = msg["channel"]
+                handles = self._subscribers.get(channel, [])
+                for h in handles:
+                    try:
+                        h._queue.put_nowait(msg)
+                    except asyncio.QueueEmpty:
+                        pass  # subscriber too slow, drop message
+                    except asyncio.QueueFull:
+                        pass  # subscriber too slow, drop message
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.error(f"PubSub dispatch loop error: {e}")
