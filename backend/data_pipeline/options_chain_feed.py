@@ -79,8 +79,18 @@ class OptionsChainFeed:
         logger.info(f"Connecting to TrueData for options chain...")
 
         try:
-            self._td = TD_live(self.config.username, self.config.password)
+            # TD_live() blocks on WebSocket handshake — run in thread to avoid
+            # blocking the event loop and failing Railway health checks.
+            self._td = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, lambda: TD_live(self.config.username, self.config.password)
+                ),
+                timeout=30.0,
+            )
             logger.info("TrueData options chain connection established")
+        except asyncio.TimeoutError:
+            logger.error("TrueData options chain connection timed out after 30s — feed disabled")
+            return
         except Exception as e:
             logger.error(f"TrueData connection failed: {e}")
             return

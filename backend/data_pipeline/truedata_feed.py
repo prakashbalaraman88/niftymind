@@ -178,8 +178,12 @@ class TrueDataFeed:
             try:
                 # TD_live() blocks on WebSocket handshake — run in thread to avoid
                 # blocking the event loop (which would fail the Railway health check).
-                self._td = await loop.run_in_executor(
-                    None, lambda: TD_live(self.config.username, self.config.password)
+                # Timeout prevents the thread from retrying forever on auth errors.
+                self._td = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None, lambda: TD_live(self.config.username, self.config.password)
+                    ),
+                    timeout=30.0,
                 )
                 logger.info("TrueData connection established")
             except Exception as exc:
