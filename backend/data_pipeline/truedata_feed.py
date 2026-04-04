@@ -181,7 +181,7 @@ class TrueDataFeed:
                 # Timeout prevents the thread from retrying forever on auth errors.
                 self._td = await asyncio.wait_for(
                     loop.run_in_executor(
-                        None, lambda: TD_live(self.config.username, self.config.password)
+                        None, lambda: TD_live(self.config.username, self.config.password, url="push.truedata.in")
                     ),
                     timeout=30.0,
                 )

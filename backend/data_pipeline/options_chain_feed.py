@@ -83,7 +83,7 @@ class OptionsChainFeed:
             # blocking the event loop and failing Railway health checks.
             self._td = await asyncio.wait_for(
                 loop.run_in_executor(
-                    None, lambda: TD_live(self.config.username, self.config.password)
+                    None, lambda: TD_live(self.config.username, self.config.password, url="push.truedata.in")
                 ),
                 timeout=30.0,
             )
