@@ -9,9 +9,9 @@ except ImportError as e:
     print(f"[FAIL] Import error: {e}")
     sys.exit(1)
 
-# Trial credentials
-USER = "trial761"
-PASS = "prakash761"
+# Trial credentials (expires 14/04/2026)
+USER = "Trial198"
+PASS = "prakash198"
 
 print(f"\nConnecting to TrueData as '{USER}'...")
 

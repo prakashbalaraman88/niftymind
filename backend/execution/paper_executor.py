@@ -144,9 +144,10 @@ class PaperExecutor:
         )
         self._trade_positions[trade_id] = trade_pos
 
+        symbol = data.get("symbol", f"{underlying} OPT")
         upsert_trade(
             trade_id=trade_id,
-            symbol=f"{underlying} OPT",
+            symbol=symbol,
             underlying=underlying,
             direction=direction,
             quantity=quantity,

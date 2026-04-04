@@ -38,6 +38,8 @@ async def main():
 
     from data_pipeline.redis_publisher import RedisPublisher
     from data_pipeline.truedata_feed import TrueDataFeed
+    from data_pipeline.fyers_tbt_feed import FyersTbtFeed
+    from data_pipeline.dhan_depth_feed import DhanDepthFeed
     from data_pipeline.options_chain_feed import OptionsChainFeed
     from data_pipeline.sentiment_feed import SentimentFeed
     from data_pipeline.news_feed import NewsFeed
@@ -58,6 +60,8 @@ async def main():
     await publisher.connect()
 
     tick_feed = TrueDataFeed(config.truedata, publisher)
+    fyers_feed = FyersTbtFeed(config.fyers, publisher)
+    dhan_feed = DhanDepthFeed(config.dhan, publisher)
     options_feed = OptionsChainFeed(config.truedata, publisher)
     sentiment_feed = SentimentFeed(publisher)
     news_feed = NewsFeed(publisher)
@@ -79,8 +83,17 @@ async def main():
         config=config,
     )
 
+    # Historical warmup: publish last 5 days of OHLC bars to pre-fill agent buffers.
+    # Runs 6 seconds after startup to ensure all agents have subscribed first.
+    async def _warmup():
+        await asyncio.sleep(6)
+        await tick_feed.startup_warmup(config.trading.instruments)
+
     tasks = [
+        asyncio.create_task(_warmup()),
         asyncio.create_task(tick_feed.start(config.trading.instruments, shutdown_event)),
+        asyncio.create_task(fyers_feed.start(config.trading.instruments, shutdown_event)),
+        asyncio.create_task(dhan_feed.start(config.trading.instruments, shutdown_event)),
         asyncio.create_task(options_feed.start(config.trading.instruments, shutdown_event)),
         asyncio.create_task(sentiment_feed.start(shutdown_event)),
         asyncio.create_task(news_feed.start(shutdown_event)),
@@ -180,6 +193,30 @@ async def main():
     logger.info(f"FastAPI server starting on port {port}")
 
     logger.info("All 12 agents, execution engine, and API server started")
+
+    # Memory watchdog — logs RSS every 60s so we can detect OOM growth
+    async def _mem_watchdog():
+        try:
+            while not shutdown_event.is_set():
+                try:
+                    with open("/proc/self/status") as f:
+                        for line in f:
+                            if line.startswith("VmRSS:"):
+                                rss_mb = int(line.split()[1]) // 1024
+                                logger.info(f"[MEM] RSS={rss_mb} MB")
+                                break
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(shutdown_event.wait(), timeout=60.0)
+                    break
+                except asyncio.TimeoutError:
+                    continue
+        except asyncio.CancelledError:
+            pass
+
+    tasks.append(asyncio.create_task(_mem_watchdog()))
+
     await shutdown_event.wait()
 
     logger.info("Shutting down...")
@@ -193,4 +230,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        logger.critical(f"main() raised: {e}", exc_info=True)
+        sys.exit(1)

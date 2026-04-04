@@ -27,5 +27,17 @@ pandas==2.2.3
 scikit-learn>=1.4.0
 yfinance>=0.2.36
 
-# Market data (optional - needs TrueData credentials)
-# truedata==7.0.1
+# Zerodha broker API
+kiteconnect>=5.0.0
+
+# Authentication
+PyJWT>=2.8.0
+
+# Market data - TrueData real-time + historical feed
+truedata
+
+# Fyers market data (TBT tick-by-tick)
+# fyers-apiv3>=3.1.0  # Disabled: pins aiohttp==3.9.3 conflicting with aiohttp==3.11.11; add back once Fyers app is activated
+
+# Dhan market data (depth feed)
+dhanhq>=2.0.0

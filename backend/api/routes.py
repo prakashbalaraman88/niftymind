@@ -2,12 +2,13 @@ import logging
 import os
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 
 from fastapi.responses import RedirectResponse
 
 from api.server import get_app_state
+from api.auth_middleware import get_current_user, optional_user
 from performance.metrics import calculate_metrics, is_proof_threshold_met
 from performance.trade_journal import TradeJournal
 from risk.drawdown_manager import DrawdownManager
@@ -483,6 +484,17 @@ async def get_lessons(
     return {"lessons": lessons, "count": len(lessons)}
 
 
+@router.get("/auth/me")
+async def get_me(user: dict = Depends(get_current_user)):
+    """Return the authenticated user's profile from the Supabase JWT."""
+    return {
+        "user_id": user.get("sub", ""),
+        "email": user.get("email", ""),
+        "role": user.get("role", "authenticated"),
+        "aud": user.get("aud", ""),
+    }
+
+
 @router.get("/zerodha/login")
 async def zerodha_login():
     """Generate Zerodha login URL. User opens this in browser to authenticate."""
@@ -495,15 +507,23 @@ async def zerodha_login():
 
 @router.get("/zerodha/callback")
 async def zerodha_callback(request_token: str = Query(...), status: str = Query("success")):
-    """Handle Zerodha OAuth callback. Exchanges request_token for access_token."""
+    """Handle Zerodha OAuth callback. Exchanges request_token for access_token.
+    Redirects back to mobile app via deep link after successful auth."""
     if status != "success":
-        raise HTTPException(status_code=400, detail=f"Zerodha login failed with status: {status}")
+        # Redirect back to app with error
+        return RedirectResponse(
+            url=f"niftymind://zerodha/callback?status=error&message=Login+failed",
+            status_code=302,
+        )
 
     api_key = os.getenv("ZERODHA_API_KEY", "")
     api_secret = os.getenv("ZERODHA_API_SECRET", "")
 
     if not api_key or not api_secret:
-        raise HTTPException(status_code=500, detail="Zerodha credentials not configured")
+        return RedirectResponse(
+            url=f"niftymind://zerodha/callback?status=error&message=Credentials+not+configured",
+            status_code=302,
+        )
 
     try:
         from kiteconnect import KiteConnect
@@ -518,16 +538,20 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         if executor and hasattr(executor, "update_access_token"):
             executor.update_access_token(access_token)
 
-        logger.info(f"Zerodha login successful. Token valid for today.")
-        return {
-            "status": "success",
-            "message": "Zerodha authentication successful. Access token stored.",
-            "user_id": session.get("user_id", ""),
-            "login_time": datetime.now(IST).isoformat(),
-        }
+        user_id = session.get("user_id", "")
+        logger.info(f"Zerodha login successful for {user_id}. Token valid for today.")
+
+        # Redirect back to mobile app with success
+        return RedirectResponse(
+            url=f"niftymind://zerodha/callback?status=success&user_id={user_id}",
+            status_code=302,
+        )
     except Exception as e:
         logger.error(f"Zerodha token exchange failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Token exchange failed: {str(e)}")
+        return RedirectResponse(
+            url=f"niftymind://zerodha/callback?status=error&message=Token+exchange+failed",
+            status_code=302,
+        )
 
 
 @router.get("/zerodha/status")
@@ -552,6 +576,80 @@ async def zerodha_status():
         }
     except Exception:
         return {"authenticated": False, "message": "Token expired. Please login again."}
+
+
+@router.post("/paper/mock-trade")
+async def inject_mock_trade(
+    underlying: str = Query("NIFTY", regex="^(NIFTY|BANKNIFTY)$"),
+    direction: str = Query("BULLISH", regex="^(BULLISH|BEARISH)$"),
+    trade_type: str = Query("INTRADAY", regex="^(INTRADAY|SCALP|BTST)$"),
+    symbol: str = Query(""),
+):
+    """Inject a paper trade directly through the executor (market-closed testing).
+
+    Publishes a RISK_APPROVED event to niftymind:trade_executions so the
+    PaperExecutor picks it up exactly as it would from the live pipeline.
+    Falls back to synthetic prices when no tick data is available.
+    """
+    import uuid
+    state = get_app_state()
+    publisher = state.get("publisher")
+    if not publisher:
+        raise HTTPException(status_code=503, detail="Redis publisher not available")
+
+    now = datetime.now(IST)
+    trade_id = f"PAPER-{now.strftime('%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
+
+    # Build a realistic symbol name if not provided
+    if not symbol:
+        # e.g. NIFTY24500CE or BANKNIFTY52000PE
+        atm = 24500 if underlying == "NIFTY" else 52000
+        opt_type = "CE" if direction == "BULLISH" else "PE"
+        expiry = now.strftime("%d%b%y").upper()
+        symbol = f"{underlying}{expiry}{atm}{opt_type}"
+
+    event = {
+        "event": "RISK_APPROVED",
+        "trade_id": trade_id,
+        "underlying": underlying,
+        "direction": direction,
+        "symbol": symbol,
+        "trade_type": trade_type,
+        "quantity": 0,          # paper executor fills from lot size
+        "confidence": 0.70,
+        "sl_points": 30,
+        "timestamp": now.isoformat(),
+    }
+
+    await publisher.publish_trade_execution(event)
+
+    return {
+        "status": "injected",
+        "trade_id": trade_id,
+        "symbol": symbol,
+        "underlying": underlying,
+        "direction": direction,
+        "trade_type": trade_type,
+        "note": "Paper executor will fill at synthetic price (market closed). Check /api/dashboard for open positions.",
+    }
+
+
+@router.post("/paper/exit/{trade_id}")
+async def exit_mock_trade(trade_id: str, exit_reason: str = Query("MANUAL_TEST")):
+    """Exit an open paper trade by trade_id (for testing)."""
+    state = get_app_state()
+    publisher = state.get("publisher")
+    if not publisher:
+        raise HTTPException(status_code=503, detail="Redis publisher not available")
+
+    await publisher.publish_trade_execution({
+        "event": "EXIT_ORDER",
+        "trade_id": trade_id,
+        "exit_reason": exit_reason,
+        "timestamp": datetime.now(IST).isoformat(),
+    })
+
+    return {"status": "exit_sent", "trade_id": trade_id, "exit_reason": exit_reason}
 
 
 @router.get("/healthz")
