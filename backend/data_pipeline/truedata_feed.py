@@ -176,7 +176,11 @@ class TrueDataFeed:
             )
 
             try:
-                self._td = TD_live(self.config.username, self.config.password)
+                # TD_live() blocks on WebSocket handshake — run in thread to avoid
+                # blocking the event loop (which would fail the Railway health check).
+                self._td = await loop.run_in_executor(
+                    None, lambda: TD_live(self.config.username, self.config.password)
+                )
                 logger.info("TrueData connection established")
             except Exception as exc:
                 logger.error("TrueData connection failed: %s — retrying in %.0fs", exc, delay)
@@ -221,7 +225,9 @@ class TrueDataFeed:
                 pass  # bid/ask already read from live_data in on_trade
 
             try:
-                self._td.start_live_data(td_symbols)
+                await loop.run_in_executor(
+                    None, lambda: self._td.start_live_data(td_symbols)
+                )
                 logger.info("Subscribed to TrueData tick feed: %s", td_symbols)
             except Exception as exc:
                 logger.error("Failed to subscribe: %s", exc)
@@ -330,7 +336,9 @@ class TrueDataFeed:
             td_symbol = td_symbol_map.get(instrument, instrument)
             td_hist = None
             try:
-                td_hist = TD_hist(self.config.username, self.config.password)
+                td_hist = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: TD_hist(self.config.username, self.config.password)
+                )
             except Exception as exc:
                 logger.error("Warmup: TD_hist connection failed: %s", exc)
                 continue
@@ -386,8 +394,13 @@ class TrueDataFeed:
             return None
 
         try:
-            td_hist = TD_hist(self.config.username, self.config.password)
-            df = td_hist.get_historic_data(symbol, duration=duration, bar_size=bar_size)
+            loop = asyncio.get_event_loop()
+            td_hist = await loop.run_in_executor(
+                None, lambda: TD_hist(self.config.username, self.config.password)
+            )
+            df = await loop.run_in_executor(
+                None, lambda: td_hist.get_historic_data(symbol, duration=duration, bar_size=bar_size)
+            )
             td_hist.disconnect()
             return df
         except Exception as exc:
