@@ -63,7 +63,7 @@ class PostTradeAnalyzer:
         logger.info("Post-Trade Analyzer starting")
 
         await self.publisher.subscribe(
-            ["niftymind:trade_closed"],
+            "trade_closed",
             self._on_trade_closed,
         )
 

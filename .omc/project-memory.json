@@ -1,0 +1,460 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1775564873593,
+  "projectRoot": "D:\\Claude Projects\\niftymind-main",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "tsconfig.json"
+        ]
+      },
+      {
+        "name": "Python",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "pyproject.toml"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "pnpm",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "pnpm build",
+    "testCommand": "pytest",
+    "lintCommand": "ruff check",
+    "devCommand": null,
+    "scripts": {
+      "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
+      "build": "pnpm run typecheck && pnpm -r --if-present run build",
+      "typecheck:libs": "tsc --build",
+      "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+    }
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": true,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "lib",
+      "scripts"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "artifacts": {
+      "path": "artifacts",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1775564873562,
+      "keyFiles": []
+    },
+    "attached_assets": {
+      "path": "attached_assets",
+      "purpose": null,
+      "fileCount": 3,
+      "lastAccessed": 1775564873563,
+      "keyFiles": [
+        "9775eca0_1773284627642.pdf",
+        "images_(1)_1773301814740.jpeg",
+        "Screenshot_20260312-195115_1773316308433.png"
+      ]
+    },
+    "backend": {
+      "path": "backend",
+      "purpose": null,
+      "fileCount": 20,
+      "lastAccessed": 1775564873573,
+      "keyFiles": [
+        "=2.0.0",
+        "=3.1.0",
+        "config.py",
+        "docker-compose.yml",
+        "fyersApi.log"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 0,
+      "lastAccessed": 1775564873573,
+      "keyFiles": []
+    },
+    "lib": {
+      "path": "lib",
+      "purpose": "Library code",
+      "fileCount": 0,
+      "lastAccessed": 1775564873574,
+      "keyFiles": []
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 3,
+      "lastAccessed": 1775564873574,
+      "keyFiles": [
+        "package.json",
+        "post-merge.sh",
+        "tsconfig.json"
+      ]
+    },
+    "backend\\api": {
+      "path": "backend\\api",
+      "purpose": "API routes",
+      "fileCount": 5,
+      "lastAccessed": 1775564873575,
+      "keyFiles": [
+        "auth_middleware.py",
+        "routes.py",
+        "server.py"
+      ]
+    },
+    "backend\\data": {
+      "path": "backend\\data",
+      "purpose": "Data files",
+      "fileCount": 0,
+      "lastAccessed": 1775564873575,
+      "keyFiles": []
+    },
+    "scripts\\node_modules": {
+      "path": "scripts\\node_modules",
+      "purpose": "Dependencies",
+      "fileCount": 0,
+      "lastAccessed": 1775564873575,
+      "keyFiles": []
+    },
+    "scripts\\src": {
+      "path": "scripts\\src",
+      "purpose": "Source code",
+      "fileCount": 1,
+      "lastAccessed": 1775564873576,
+      "keyFiles": [
+        "hello.ts"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "backend\\main.py",
+      "accessCount": 25,
+      "lastAccessed": 1775535106839,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline\\truedata_feed.py",
+      "accessCount": 23,
+      "lastAccessed": 1775538684361,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline\\fyers_tbt_feed.py",
+      "accessCount": 18,
+      "lastAccessed": 1775534010488,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline\\redis_publisher.py",
+      "accessCount": 11,
+      "lastAccessed": 1775536517394,
+      "type": "file"
+    },
+    {
+      "path": "backend\\api\\routes.py",
+      "accessCount": 11,
+      "lastAccessed": 1775537306945,
+      "type": "file"
+    },
+    {
+      "path": "backend\\.env",
+      "accessCount": 10,
+      "lastAccessed": 1775532808352,
+      "type": "file"
+    },
+    {
+      "path": "backend\\agents\\order_flow_agent.py",
+      "accessCount": 9,
+      "lastAccessed": 1775480174073,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline\\dhan_depth_feed.py",
+      "accessCount": 9,
+      "lastAccessed": 1775533556815,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline\\fyers_options_chain_feed.py",
+      "accessCount": 9,
+      "lastAccessed": 1775536430159,
+      "type": "file"
+    },
+    {
+      "path": "backend\\execution\\paper_executor.py",
+      "accessCount": 9,
+      "lastAccessed": 1775537204596,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 8,
+      "lastAccessed": 1775532673207,
+      "type": "directory"
+    },
+    {
+      "path": "backend\\config.py",
+      "accessCount": 8,
+      "lastAccessed": 1775534928112,
+      "type": "file"
+    },
+    {
+      "path": "backend",
+      "accessCount": 8,
+      "lastAccessed": 1775538495386,
+      "type": "directory"
+    },
+    {
+      "path": "backend\\agents\\base_agent.py",
+      "accessCount": 8,
+      "lastAccessed": 1775539795659,
+      "type": "file"
+    },
+    {
+      "path": "backend\\scripts\\run_training.py",
+      "accessCount": 7,
+      "lastAccessed": 1775483073953,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline\\options_chain_feed.py",
+      "accessCount": 6,
+      "lastAccessed": 1775479684584,
+      "type": "file"
+    },
+    {
+      "path": "backend\\requirements.txt",
+      "accessCount": 5,
+      "lastAccessed": 1775471394942,
+      "type": "file"
+    },
+    {
+      "path": "backend\\learning\\fyers_backtester.py",
+      "accessCount": 5,
+      "lastAccessed": 1775483157029,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline\\fyers_warmup.py",
+      "accessCount": 5,
+      "lastAccessed": 1775534052858,
+      "type": "file"
+    },
+    {
+      "path": "artifacts\\mobile\\lib\\api.ts",
+      "accessCount": 5,
+      "lastAccessed": 1775537331342,
+      "type": "file"
+    },
+    {
+      "path": "backend\\test_truedata_connection.py",
+      "accessCount": 3,
+      "lastAccessed": 1775478738333,
+      "type": "file"
+    },
+    {
+      "path": "backend\\agents\\__init__.py",
+      "accessCount": 3,
+      "lastAccessed": 1775535504287,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Users\\Prakash Other\\.claude\\projects\\D--Claude-Projects-niftymind-main\\memory\\data_feed_decision.md",
+      "accessCount": 2,
+      "lastAccessed": 1775269394370,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Users\\Prakash Other\\.claude\\projects\\D--Claude-Projects-niftymind-main\\memory\\MEMORY.md",
+      "accessCount": 2,
+      "lastAccessed": 1775269403644,
+      "type": "file"
+    },
+    {
+      "path": "backend\\scripts\\generate_fyers_token.py",
+      "accessCount": 2,
+      "lastAccessed": 1775477849319,
+      "type": "file"
+    },
+    {
+      "path": "backend\\agents\\technical_agent.py",
+      "accessCount": 2,
+      "lastAccessed": 1775478731655,
+      "type": "file"
+    },
+    {
+      "path": "backend\\test_mock_trade.py",
+      "accessCount": 2,
+      "lastAccessed": 1775478738754,
+      "type": "file"
+    },
+    {
+      "path": "artifacts\\mobile\\start_expo.bat",
+      "accessCount": 2,
+      "lastAccessed": 1775482495207,
+      "type": "file"
+    },
+    {
+      "path": "backend\\learning",
+      "accessCount": 2,
+      "lastAccessed": 1775482844126,
+      "type": "directory"
+    },
+    {
+      "path": "C:\\Temp\\run_training.ps1",
+      "accessCount": 2,
+      "lastAccessed": 1775483031327,
+      "type": "file"
+    },
+    {
+      "path": "backend\\api",
+      "accessCount": 2,
+      "lastAccessed": 1775533607446,
+      "type": "directory"
+    },
+    {
+      "path": "backend\\agents\\options_chain_agent.py",
+      "accessCount": 2,
+      "lastAccessed": 1775536472396,
+      "type": "file"
+    },
+    {
+      "path": "backend\\api\\server.py",
+      "accessCount": 2,
+      "lastAccessed": 1775537164327,
+      "type": "file"
+    },
+    {
+      "path": "backend\\agents\\scalping_agent.py",
+      "accessCount": 2,
+      "lastAccessed": 1775539576136,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Users\\Prakash Other\\.claude\\projects\\D--Claude-Projects-niftymind-main\\memory\\project_architecture.md",
+      "accessCount": 1,
+      "lastAccessed": 1775269334072,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Users\\Prakash Other\\.claude\\projects\\D--Claude-Projects-niftymind-main\\memory\\infrastructure_decision.md",
+      "accessCount": 1,
+      "lastAccessed": 1775269340713,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Users\\Prakash Other\\.claude\\projects\\D--Claude-Projects-niftymind-main\\memory\\railway_deployment.md",
+      "accessCount": 1,
+      "lastAccessed": 1775269367581,
+      "type": "file"
+    },
+    {
+      "path": "backend\\railway.toml",
+      "accessCount": 1,
+      "lastAccessed": 1775270323299,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline",
+      "accessCount": 1,
+      "lastAccessed": 1775295266355,
+      "type": "directory"
+    },
+    {
+      "path": "backend\\data_pipeline\\yfinance_warmup.py",
+      "accessCount": 1,
+      "lastAccessed": 1775479388260,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Temp\\start_expo.ps1",
+      "accessCount": 1,
+      "lastAccessed": 1775482549163,
+      "type": "file"
+    },
+    {
+      "path": "backend\\learning\\historical_backtester.py",
+      "accessCount": 1,
+      "lastAccessed": 1775482797541,
+      "type": "file"
+    },
+    {
+      "path": "backend\\learning\\trade_outcome_model.py",
+      "accessCount": 1,
+      "lastAccessed": 1775482850104,
+      "type": "file"
+    },
+    {
+      "path": "backend\\learning\\lesson_store.py",
+      "accessCount": 1,
+      "lastAccessed": 1775482851060,
+      "type": "file"
+    },
+    {
+      "path": "backend\\learning\\agent_accuracy_tracker.py",
+      "accessCount": 1,
+      "lastAccessed": 1775482851176,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Temp\\gen_fyers_token.ps1",
+      "accessCount": 1,
+      "lastAccessed": 1775531981488,
+      "type": "file"
+    },
+    {
+      "path": "C:\\Temp\\start_backend.ps1",
+      "accessCount": 1,
+      "lastAccessed": 1775532184302,
+      "type": "file"
+    },
+    {
+      "path": "artifacts\\mobile\\app",
+      "accessCount": 1,
+      "lastAccessed": 1775532191851,
+      "type": "directory"
+    },
+    {
+      "path": "artifacts\\mobile\\app\\(tabs)\\news.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1775532197355,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline\\news_feed.py",
+      "accessCount": 1,
+      "lastAccessed": 1775532240026,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

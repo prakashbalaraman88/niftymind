@@ -6,7 +6,9 @@ import type {
   Signal,
   NewsItem,
   Settings,
+  ZerodhaStatus,
 } from "@/types/api";
+import { supabase } from "@/lib/supabase";
 
 const getBaseUrl = (): string => {
   const domain = process.env.EXPO_PUBLIC_DOMAIN;
@@ -19,8 +21,24 @@ const getBaseUrl = (): string => {
 const BASE_URL = getBaseUrl();
 const API_PREFIX = `${BASE_URL}/api`;
 
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  try {
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.access_token) {
+      headers["Authorization"] = `Bearer ${data.session.access_token}`;
+    }
+  } catch {
+    // Continue without auth header if session retrieval fails
+  }
+  return headers;
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_PREFIX}${path}`);
+  const authHeaders = await getAuthHeaders();
+  const res = await fetch(`${API_PREFIX}${path}`, {
+    headers: { ...authHeaders },
+  });
   if (!res.ok) {
     throw new Error(`API error ${res.status}: ${res.statusText}`);
   }
@@ -28,9 +46,10 @@ async function fetchJson<T>(path: string): Promise<T> {
 }
 
 async function postJson<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  const authHeaders = await getAuthHeaders();
   const res = await fetch(`${API_PREFIX}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -52,6 +71,9 @@ export const api = {
   getTradeDetail: (tradeId: string) =>
     fetchJson<TradeDetail>(`/trades/${tradeId}`),
 
+  closeTrade: (tradeId: string) =>
+    postJson<{ status: string; trade_id: string }>(`/trades/${tradeId}/close`, {}),
+
   getAgents: () => fetchJson<{ agents: AgentStatus[] }>("/agents"),
 
   getSignals: (limit = 50, agentId?: string) => {
@@ -69,6 +91,17 @@ export const api = {
 
   registerPushToken: (token: string) =>
     postJson<{ status: string }>("/push-token", { token }),
+
+  // ── Zerodha ────────────────────────────────────────────
+  getZerodhaLoginUrl: () =>
+    fetchJson<{ login_url: string }>("/zerodha/login"),
+
+  getZerodhaStatus: () =>
+    fetchJson<ZerodhaStatus>("/zerodha/status"),
+
+  // ── Auth ───────────────────────────────────────────────
+  getMe: () =>
+    fetchJson<{ user_id: string; email: string; role: string }>("/auth/me"),
 };
 
 export const getWsUrl = (): string => {

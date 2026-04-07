@@ -1,0 +1,8 @@
+{"level":"ERROR","location":"[On_error:390] tbt_ws","message":"Connection to remote host was lost.","timestamp":"2026-04-07 16:30:08,799+0530","service":"FyersTbtSocket"}
+{"level":"ERROR","location":"[On_error:390] tbt_ws","message":"Connection to remote host was lost.","timestamp":"2026-04-07 16:48:09,093+0530","service":"FyersTbtSocket"}
+{"level":"ERROR","location":"[On_error:390] tbt_ws","message":"Connection to remote host was lost.","timestamp":"2026-04-07 18:01:33,678+0530","service":"FyersTbtSocket"}
+{"level":"ERROR","location":"[On_error:390] tbt_ws","message":"[Errno 11001] getaddrinfo failed","timestamp":"2026-04-07 18:01:38,683+0530","service":"FyersTbtSocket"}
+{"level":"ERROR","location":"[On_error:390] tbt_ws","message":"[Errno 11001] getaddrinfo failed","timestamp":"2026-04-07 18:01:43,684+0530","service":"FyersTbtSocket"}
+{"level":"ERROR","location":"[On_error:390] tbt_ws","message":"[Errno 11001] getaddrinfo failed","timestamp":"2026-04-07 18:01:48,690+0530","service":"FyersTbtSocket"}
+{"level":"ERROR","location":"[On_error:390] tbt_ws","message":"[Errno 11001] getaddrinfo failed","timestamp":"2026-04-07 18:01:53,692+0530","service":"FyersTbtSocket"}
+{"level":"ERROR","location":"[On_error:390] tbt_ws","message":"[Errno 11001] getaddrinfo failed","timestamp":"2026-04-07 18:01:58,694+0530","service":"FyersTbtSocket"}

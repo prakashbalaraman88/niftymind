@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd \\\"D:\\\\Claude Projects\\\\niftymind-main\\\\backend\\\" && python -X utf8 -c \\\"\\nimport asyncio, os\\nfrom dotenv import load_dotenv\\nload_dotenv()\\n\\n# Temporarily blank TrueData creds to test...",
+  "error": "Exit code 1\nTraceback (most recent call last):\r\n  File \"<string>\", line 32, in <module>\r\n  File \"C:\\Users\\Prakash Other\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\asyncio\\runners.py\", line 195, in run\r\n    return runner.run(main)\r\n           ^^^^^^^^^^^^^^^^\r\n  File \"C:\\Users\\Prakash Other\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\asyncio\\runners.py\", line 118, in run\r\n    return self._loop.run_until_complete(task)\r\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\n  File \"C:\\Users\\Prakash Othe...",
+  "timestamp": "2026-04-06T12:43:33.563Z",
+  "retry_count": 1
+}

@@ -33,6 +33,22 @@ def _env_bool(key: str, default: bool) -> bool:
 
 
 @dataclass(frozen=True)
+class FyersConfig:
+    app_id: str = field(default_factory=lambda: os.getenv("FYERS_APP_ID", ""))
+    secret_key: str = field(default_factory=lambda: os.getenv("FYERS_SECRET_KEY", ""))
+    access_token: str = field(default_factory=lambda: os.getenv("FYERS_ACCESS_TOKEN", ""))
+    reconnect: bool = field(default_factory=lambda: _env_bool("FYERS_RECONNECT", True))
+
+
+@dataclass(frozen=True)
+class DhanConfig:
+    client_id: str = field(default_factory=lambda: os.getenv("DHAN_CLIENT_ID", ""))
+    access_token: str = field(default_factory=lambda: os.getenv("DHAN_ACCESS_TOKEN", ""))
+    nifty_security_id: str = field(default_factory=lambda: os.getenv("DHAN_NIFTY_SECURITY_ID", "13"))
+    banknifty_security_id: str = field(default_factory=lambda: os.getenv("DHAN_BANKNIFTY_SECURITY_ID", "25"))
+
+
+@dataclass(frozen=True)
 class TrueDataConfig:
     username: str = field(default_factory=lambda: os.getenv("TRUEDATA_USERNAME", ""))
     password: str = field(default_factory=lambda: os.getenv("TRUEDATA_PASSWORD", ""))
@@ -186,6 +202,8 @@ class AppConfig:
     risk: RiskConfig = field(default_factory=RiskConfig)
     trading: TradingConfig = field(default_factory=TradingConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
+    fyers: FyersConfig = field(default_factory=FyersConfig)
+    dhan: DhanConfig = field(default_factory=DhanConfig)
 
 
 REDIS_CHANNELS = {
@@ -205,4 +223,6 @@ REDIS_CHANNELS = {
     "global_macro": "niftymind:global_macro",
     "trade_closed": "niftymind:trade_closed",
     "learning_update": "niftymind:learning_update",
+    "depth": "niftymind:depth",
+    "order_book": "niftymind:order_book",
 }

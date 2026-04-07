@@ -155,13 +155,13 @@ class PaperExecutor:
             consensus_score=float(data.get("confidence", 0)),
             entry_price=fill_price,
             entry_time=datetime.now(IST).isoformat(),
-            status="FILLED",
+            status="OPEN",
         )
 
         log_trade_event(
             trade_id=trade_id,
             event="ENTRY",
-            status="FILLED",
+            status="OPEN",
             price=fill_price,
             quantity=quantity,
             details={

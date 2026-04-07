@@ -20,13 +20,11 @@ class _SubscriberHandle:
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=256)
 
     async def get_message(self, ignore_subscribe_messages: bool = True, timeout: float = 0):
-        try:
-            return self._queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return None
+        # Block until a message arrives (caller uses asyncio.wait_for for timeout)
+        return await self._queue.get()
 
     async def unsubscribe(self, *args):
-        pass  # cleanup handled by RedisPublisher._remove_subscriber
+        pass
 
     async def aclose(self):
         pass
@@ -47,7 +45,7 @@ class RedisPublisher:
         self._client = aioredis.from_url(
             self._config.url,
             decode_responses=True,
-            max_connections=3,
+            max_connections=20,
             socket_connect_timeout=5,
             socket_timeout=5,
         )
@@ -81,18 +79,21 @@ class RedisPublisher:
         await self._publish(CHANNELS["ticks"], asdict(tick))
 
     async def publish_options_chain(self, snapshot):
-        data = {
-            "underlying": snapshot.underlying,
-            "spot_price": snapshot.spot_price,
-            "pcr": snapshot.pcr,
-            "max_pain": snapshot.max_pain,
-            "iv_rank": snapshot.iv_rank,
-            "iv_percentile": snapshot.iv_percentile,
-            "total_ce_oi": snapshot.total_ce_oi,
-            "total_pe_oi": snapshot.total_pe_oi,
-            "timestamp": snapshot.timestamp,
-            "options": [asdict(opt) for opt in snapshot.options],
-        }
+        if isinstance(snapshot, dict):
+            data = snapshot
+        else:
+            data = {
+                "underlying": snapshot.underlying,
+                "spot_price": snapshot.spot_price,
+                "pcr": snapshot.pcr,
+                "max_pain": snapshot.max_pain,
+                "iv_rank": snapshot.iv_rank,
+                "iv_percentile": snapshot.iv_percentile,
+                "total_ce_oi": snapshot.total_ce_oi,
+                "total_pe_oi": snapshot.total_pe_oi,
+                "timestamp": snapshot.timestamp,
+                "options": [asdict(opt) for opt in snapshot.options],
+            }
         await self._publish(CHANNELS["options_chain"], data)
 
     async def publish_ohlc(self, timeframe: str, ohlc_data: dict):
@@ -169,11 +170,15 @@ class RedisPublisher:
         """Single loop reading the shared PubSub and fanning out to handles."""
         try:
             while True:
-                if self._shared_pubsub is None:
-                    break
-                msg = await self._shared_pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=1.0,
-                )
+                msg = None
+                async with self._mux_lock:
+                    if self._shared_pubsub is None:
+                        break
+                    # Non-blocking read so we release the lock promptly,
+                    # allowing subscribe() to acquire it without deadlocking.
+                    msg = await self._shared_pubsub.get_message(
+                        ignore_subscribe_messages=True, timeout=0,
+                    )
                 if msg is None or msg["type"] != "message":
                     await asyncio.sleep(0.01)
                     continue
@@ -183,8 +188,6 @@ class RedisPublisher:
                 for h in handles:
                     try:
                         h._queue.put_nowait(msg)
-                    except asyncio.QueueEmpty:
-                        pass  # subscriber too slow, drop message
                     except asyncio.QueueFull:
                         pass  # subscriber too slow, drop message
         except asyncio.CancelledError:

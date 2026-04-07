@@ -115,6 +115,17 @@ async def get_trades(
                     trade[k] = v.isoformat()
             trades.append(trade)
 
+        # Enrich OPEN trades with live unrealized P&L from executor
+        state = get_app_state()
+        executor = state.get("executor")
+        if executor:
+            open_positions = {p["trade_id"]: p for p in executor.get_open_positions()}
+            for trade in trades:
+                if trade.get("status") == "OPEN" and trade["trade_id"] in open_positions:
+                    pos = open_positions[trade["trade_id"]]
+                    trade["current_price"] = pos.get("current_price", trade.get("entry_price"))
+                    trade["unrealized_pnl"] = pos.get("unrealized_pnl", 0)
+
         cur.execute("SELECT COUNT(*) FROM trades" + (" WHERE " + " AND ".join(conditions[:len(conditions)]) if conditions else ""), params[:len(conditions)] if conditions else [])
         total = cur.fetchone()[0]
 
@@ -124,6 +135,26 @@ async def get_trades(
         raise HTTPException(status_code=500, detail="Failed to fetch trades")
     finally:
         conn.close()
+
+
+@router.post("/trades/{trade_id}/close")
+async def close_trade(trade_id: str):
+    """Manually close an open position at current market price."""
+    state = get_app_state()
+    executor = state.get("executor")
+    if not executor:
+        raise HTTPException(status_code=503, detail="Executor not available")
+
+    open_positions = {p["trade_id"]: p for p in executor.get_open_positions()}
+    if trade_id not in open_positions:
+        raise HTTPException(status_code=404, detail="Open position not found")
+
+    await executor._execute_exit({
+        "trade_id": trade_id,
+        "exit_reason": "MANUAL_CLOSE",
+    })
+
+    return {"status": "closed", "trade_id": trade_id}
 
 
 @router.get("/trades/{trade_id}")

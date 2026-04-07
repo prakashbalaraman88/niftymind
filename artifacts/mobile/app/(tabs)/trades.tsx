@@ -25,6 +25,19 @@ import { Confetti } from "@/components/Confetti";
 import type { Trade, TradeDetail, AgentVote } from "@/types/api";
 
 const C = colors.dark;
+
+function formatTradeTime(ts: string | null | undefined): string {
+  if (!ts) return "--";
+  try {
+    const d = new Date(ts);
+    return d.toLocaleString("en-IN", {
+      day: "2-digit", month: "short",
+      hour: "2-digit", minute: "2-digit",
+      hour12: true, timeZone: "Asia/Kolkata",
+    });
+  } catch { return "--"; }
+}
+
 type FilterStatus = "all" | "OPEN" | "CLOSED" | "CANCELLED";
 const FILTERS: { key: FilterStatus; label: string }[] = [
   { key: "all", label: "All" },
@@ -134,7 +147,9 @@ function TradeRow({
   const rowOpacity = useRef(new Animated.Value(0)).current;
   const rowY = useRef(new Animated.Value(16)).current;
   const dirVariant = trade.direction === "BULLISH" || trade.direction === "BUY" ? "bullish" : "bearish";
-  const isProfitable = (trade.pnl ?? 0) > 0;
+  const isOpen = trade.status === "OPEN";
+  const displayPnl = isOpen ? (trade as any).unrealized_pnl : trade.pnl;
+  const isProfitable = (displayPnl ?? 0) > 0;
   const isClosed = trade.status === "CLOSED";
 
   useEffect(() => {
@@ -172,12 +187,20 @@ function TradeRow({
               {trade.trade_type} · {trade.quantity} qty ·{" "}
               <Text style={{ color: statusColor }}>{trade.status}</Text>
             </Text>
+            <Text style={styles.tradeTime}>
+              <Feather name="clock" size={10} color={C.textTertiary} />
+              {"  "}{formatTradeTime(trade.entry_time || trade.created_at)}
+              {trade.exit_time ? `  →  ${formatTradeTime(trade.exit_time)}` : ""}
+            </Text>
           </View>
           <View style={styles.tradeRight}>
-            {trade.pnl != null ? (
-              <PnlText value={trade.pnl} prefix="₹" style={styles.tradePnl} />
+            {displayPnl != null ? (
+              <PnlText value={displayPnl} prefix="₹" style={styles.tradePnl} />
             ) : (
               <Text style={styles.tradePrice}>₹{trade.entry_price?.toLocaleString("en-IN")}</Text>
+            )}
+            {isOpen && (
+              <Text style={styles.tradeOpenLabel}>LIVE</Text>
             )}
             <Feather
               name={isExpanded ? "chevron-up" : "chevron-down"}
@@ -193,11 +216,25 @@ function TradeRow({
 }
 
 function TradeExpanded({ tradeId, trade }: { tradeId: string; trade: Trade }) {
+  const [closing, setClosing] = useState(false);
+  const queryClient = useQueryClient();
   const { data, isLoading } = useQuery<TradeDetail>({
     queryKey: ["trade-detail", tradeId],
     queryFn: () => api.getTradeDetail(tradeId),
     retry: false,
   });
+
+  const isOpen = trade.status === "OPEN";
+
+  const handleClose = async () => {
+    setClosing(true);
+    try {
+      await api.closeTrade(tradeId);
+      queryClient.invalidateQueries({ queryKey: ["trades"] });
+    } catch (e: any) {
+      setClosing(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -217,6 +254,9 @@ function TradeExpanded({ tradeId, trade }: { tradeId: string; trade: Trade }) {
         <PriceItem label="SL" value={trade.sl_price} color={C.red} />
         <PriceItem label="Target" value={trade.target_price} color={C.green} />
         {trade.exit_price != null && <PriceItem label="Exit" value={trade.exit_price} />}
+        {isOpen && (trade as any).current_price != null && (
+          <PriceItem label="Current" value={(trade as any).current_price} color={C.accentBright} />
+        )}
       </View>
       {trade.consensus_score != null && (
         <View style={styles.consensusRow}>
@@ -232,6 +272,22 @@ function TradeExpanded({ tradeId, trade }: { tradeId: string; trade: Trade }) {
           <Feather name="log-out" size={12} color={C.textSecondary} />
           <Text style={styles.exitReasonText}>{trade.exit_reason}</Text>
         </View>
+      )}
+      {isOpen && (
+        <Pressable
+          onPress={handleClose}
+          disabled={closing}
+          style={[styles.closeBtn, closing && { opacity: 0.5 }]}
+        >
+          {closing ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <>
+              <Feather name="x-circle" size={14} color="#fff" />
+              <Text style={styles.closeBtnText}>Close Position</Text>
+            </>
+          )}
+        </Pressable>
       )}
       {votes.length > 0 && (
         <>
@@ -302,6 +358,7 @@ const styles = StyleSheet.create({
   tradeSymbolRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 },
   tradeSymbol: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: C.text },
   tradeMeta: { fontSize: 12, fontFamily: "Inter_400Regular", color: C.textSecondary },
+  tradeTime: { fontSize: 11, fontFamily: "Inter_400Regular", color: C.textTertiary, marginTop: 3 },
   tradeRight: { alignItems: "flex-end", gap: 6 },
   tradePnl: { fontSize: 15 },
   tradePrice: { fontSize: 14, fontFamily: "Inter_500Medium", color: C.text },
@@ -330,4 +387,10 @@ const styles = StyleSheet.create({
   voteDir: { fontSize: 10, fontFamily: "Inter_600SemiBold", width: 30, textAlign: "right" },
   voteConf: { fontSize: 11, fontFamily: "Inter_500Medium", color: C.textSecondary, width: 28, textAlign: "right" },
   voteReasoning: { fontSize: 11, fontFamily: "Inter_400Regular", color: C.textTertiary, lineHeight: 16, marginTop: 5, paddingLeft: 18 },
+  tradeOpenLabel: { fontSize: 10, fontFamily: "Inter_700Bold", color: C.accentBright, letterSpacing: 1 },
+  closeBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    backgroundColor: C.red, borderRadius: 10, paddingVertical: 10, marginTop: 12,
+  },
+  closeBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#fff" },
 });

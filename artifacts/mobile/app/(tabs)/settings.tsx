@@ -17,14 +17,17 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
+import * as WebBrowser from "expo-web-browser";
+import * as Linking from "expo-linking";
 import Slider from "@react-native-community/slider";
 
 import colors from "@/constants/colors";
 import { api } from "@/lib/api";
 import { useWebSocket } from "@/contexts/WebSocketContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { Card } from "@/components/Card";
 import { StatusBadge } from "@/components/StatusBadge";
-import type { Settings } from "@/types/api";
+import type { Settings, ZerodhaStatus } from "@/types/api";
 
 const C = colors.dark;
 const INSTRUMENTS = ["NIFTY", "BANKNIFTY"];
@@ -35,10 +38,19 @@ export default function SettingsScreen() {
   const { connected, subscribe } = useWebSocket();
   const pageOpacity = useRef(new Animated.Value(0)).current;
 
+  const { user, signOut } = useAuth();
+
   const { data: settings, isLoading, isError } = useQuery<Settings>({
     queryKey: ["settings"],
     queryFn: api.getSettings,
     refetchInterval: 60000,
+    retry: false,
+  });
+
+  const { data: zerodhaStatus, refetch: refetchZerodha } = useQuery<ZerodhaStatus>({
+    queryKey: ["zerodha-status"],
+    queryFn: api.getZerodhaStatus,
+    refetchInterval: 120000,
     retry: false,
   });
 
@@ -126,6 +138,30 @@ export default function SettingsScreen() {
     if (maxPositions !== settings?.max_open_positions) updates.max_open_positions = maxPositions;
     if (Object.keys(updates).length === 0) { Alert.alert("No Changes", "Nothing to update."); return; }
     mutation.mutate(updates);
+  };
+
+  const handleZerodhaLogin = async () => {
+    try {
+      const { login_url } = await api.getZerodhaLoginUrl();
+      // Open Zerodha login in browser; callback redirects via deep link
+      await WebBrowser.openBrowserAsync(login_url);
+      // Refetch status after returning from browser
+      setTimeout(() => refetchZerodha(), 2000);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to open Zerodha login";
+      Alert.alert("Zerodha Login Error", msg);
+    }
+  };
+
+  const handleSignOut = () => {
+    Alert.alert("Sign Out", "Are you sure you want to sign out?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Sign Out",
+        style: "destructive",
+        onPress: () => signOut(),
+      },
+    ]);
   };
 
   if (isLoading && !isError) {
@@ -218,6 +254,56 @@ export default function SettingsScreen() {
             </View>
           </Card>
 
+          {/* Zerodha Broker Connection */}
+          <Card style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Zerodha Broker</Text>
+            <Text style={styles.sectionSubtitle}>
+              Connect your Zerodha account for live trading
+            </Text>
+            <View style={styles.settingRow}>
+              <View
+                style={[
+                  styles.settingIcon,
+                  {
+                    backgroundColor: zerodhaStatus?.authenticated
+                      ? C.greenDark
+                      : C.redDark,
+                  },
+                ]}
+              >
+                <Feather
+                  name={zerodhaStatus?.authenticated ? "check-circle" : "link"}
+                  size={13}
+                  color={zerodhaStatus?.authenticated ? C.green : C.red}
+                />
+              </View>
+              <Text style={styles.settingLabel}>
+                {zerodhaStatus?.authenticated
+                  ? `${zerodhaStatus.user_name ?? zerodhaStatus.user_id}`
+                  : "Not connected"}
+              </Text>
+              {zerodhaStatus?.authenticated ? (
+                <StatusBadge label="ACTIVE" variant="live" size="medium" />
+              ) : (
+                <Pressable onPress={handleZerodhaLogin}>
+                  <LinearGradient
+                    colors={C.gradient.accent}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.connectBtn}
+                  >
+                    <Text style={styles.connectBtnText}>Connect</Text>
+                  </LinearGradient>
+                </Pressable>
+              )}
+            </View>
+            {zerodhaStatus?.authenticated && (
+              <Text style={styles.zerodhaNote}>
+                Token expires daily at 6:00 AM. Re-login required each trading day.
+              </Text>
+            )}
+          </Card>
+
           <Card style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Capital & Risk</Text>
 
@@ -285,6 +371,21 @@ export default function SettingsScreen() {
               label="Consensus Threshold"
               value={`${((settings?.consensus_threshold ?? 0.6) * 100).toFixed(0)}%`}
             />
+          </Card>
+
+          {/* Account */}
+          <Card style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Account</Text>
+            <View style={styles.settingRow}>
+              <View style={[styles.settingIcon, { backgroundColor: C.accentLight }]}>
+                <Feather name="user" size={13} color={C.accentBright} />
+              </View>
+              <Text style={styles.settingLabel}>{user?.email ?? "Unknown"}</Text>
+            </View>
+            <Pressable onPress={handleSignOut} style={styles.signOutBtn}>
+              <Feather name="log-out" size={16} color={C.red} />
+              <Text style={styles.signOutText}>Sign Out</Text>
+            </Pressable>
           </Card>
         </ScrollView>
       </Animated.View>
@@ -448,4 +549,20 @@ const styles = StyleSheet.create({
   modalBtnCancelText: { fontSize: 15, fontFamily: "Inter_500Medium", color: C.textSecondary },
   modalBtnConfirm: { borderRadius: 14, paddingVertical: 14, alignItems: "center" },
   modalBtnConfirmText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  connectBtn: { borderRadius: 10, paddingVertical: 8, paddingHorizontal: 16 },
+  connectBtnText: { fontSize: 13, fontFamily: "Inter_600SemiBold", color: "#fff" },
+  zerodhaNote: { fontSize: 11, fontFamily: "Inter_400Regular", color: C.textTertiary, marginTop: 8, lineHeight: 16 },
+  signOutBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    marginTop: 8,
+    borderRadius: 14,
+    backgroundColor: C.redDark,
+    borderWidth: 1,
+    borderColor: "rgba(255,59,92,0.2)",
+  },
+  signOutText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: C.red },
 });

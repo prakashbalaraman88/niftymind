@@ -37,10 +37,10 @@ async def main():
     logger.info(f"Trading capital: ₹{config.risk.capital:,.0f}")
 
     from data_pipeline.redis_publisher import RedisPublisher
-    from data_pipeline.truedata_feed import TrueDataFeed
     from data_pipeline.fyers_tbt_feed import FyersTbtFeed
     from data_pipeline.dhan_depth_feed import DhanDepthFeed
-    from data_pipeline.options_chain_feed import OptionsChainFeed
+    from data_pipeline.fyers_options_chain_feed import FyersOptionsChainFeed
+    from data_pipeline.fyers_quotes_poller import start_quotes_poller
     from data_pipeline.sentiment_feed import SentimentFeed
     from data_pipeline.news_feed import NewsFeed
     from data_pipeline.global_macro_feed import GlobalMacroFeed
@@ -59,10 +59,9 @@ async def main():
     publisher = RedisPublisher(config.redis)
     await publisher.connect()
 
-    tick_feed = TrueDataFeed(config.truedata, publisher)
     fyers_feed = FyersTbtFeed(config.fyers, publisher)
     dhan_feed = DhanDepthFeed(config.dhan, publisher)
-    options_feed = OptionsChainFeed(config.truedata, publisher)
+    fyers_options_feed = FyersOptionsChainFeed(config.fyers, publisher)
     sentiment_feed = SentimentFeed(publisher)
     news_feed = NewsFeed(publisher)
     macro_feed = GlobalMacroFeed(publisher)
@@ -87,14 +86,15 @@ async def main():
     # Runs 6 seconds after startup to ensure all agents have subscribed first.
     async def _warmup():
         await asyncio.sleep(6)
-        await tick_feed.startup_warmup(config.trading.instruments)
+        from data_pipeline.fyers_warmup import fyers_warmup
+        await fyers_warmup(config.fyers, publisher, config.trading.instruments)
 
     tasks = [
         asyncio.create_task(_warmup()),
-        asyncio.create_task(tick_feed.start(config.trading.instruments, shutdown_event)),
         asyncio.create_task(fyers_feed.start(config.trading.instruments, shutdown_event)),
         asyncio.create_task(dhan_feed.start(config.trading.instruments, shutdown_event)),
-        asyncio.create_task(options_feed.start(config.trading.instruments, shutdown_event)),
+        asyncio.create_task(fyers_options_feed.start(config.trading.instruments, shutdown_event)),
+        asyncio.create_task(start_quotes_poller(config.fyers, publisher, config.trading.instruments, shutdown_event)),
         asyncio.create_task(sentiment_feed.start(shutdown_event)),
         asyncio.create_task(news_feed.start(shutdown_event)),
         asyncio.create_task(macro_feed.start(shutdown_event)),

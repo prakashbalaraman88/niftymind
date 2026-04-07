@@ -15,7 +15,7 @@ redis==5.2.1
 
 # HTTP clients
 httpx==0.28.1
-aiohttp==3.11.11
+aiohttp==3.9.3
 
 # AI / LLM
 google-genai>=1.0.0
@@ -37,7 +37,7 @@ PyJWT>=2.8.0
 truedata
 
 # Fyers market data (TBT tick-by-tick)
-# fyers-apiv3>=3.1.0  # Disabled: pins aiohttp==3.9.3 conflicting with aiohttp==3.11.11; add back once Fyers app is activated
+fyers-apiv3>=3.1.0
 
 # Dhan market data (depth feed)
 dhanhq>=2.0.0

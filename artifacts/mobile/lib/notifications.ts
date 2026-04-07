@@ -100,6 +100,8 @@ export function addNotificationResponseListener(
 }
 
 export async function fireTradeNotification(data: Record<string, unknown>) {
+  if (Platform.OS === "web") return; // Notifications not supported on web
+
   const action = (data.action as string) || "executed";
   const symbol = (data.symbol as string) || "Unknown";
   const direction = (data.direction as string) || "";
@@ -130,6 +132,8 @@ export async function fireTradeNotification(data: Record<string, unknown>) {
 }
 
 export async function fireRiskNotification(data: Record<string, unknown>) {
+  if (Platform.OS === "web") return; // Notifications not supported on web
+
   const event = (data.event as string) || (data.message as string) || "Risk alert";
   const detail = (data.detail as string) || (data.reasoning as string) || "";
 

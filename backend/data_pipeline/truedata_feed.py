@@ -41,6 +41,7 @@ class TickData:
     high: float
     low: float
     close: float
+    change_pct: float = 0.0
 
 
 @dataclass

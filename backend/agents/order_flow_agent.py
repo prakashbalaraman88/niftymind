@@ -38,10 +38,11 @@ class OrderFlowAgent(BaseAgent):
         self._sweep_buffer: dict[str, deque] = {}
         self._consecutive_ticks: dict[str, list] = {}
         self._volume_delta_at_price: dict[str, dict[float, dict]] = {}
+        self._latest_depth: dict[str, dict] = {}  # underlying → latest depth snapshot
 
     @property
     def subscribed_channels(self) -> list[str]:
-        return ["ticks"]
+        return ["ticks", "depth"]
 
     async def process_message(self, channel: str, data: dict) -> Signal | None:
         symbol = data.get("symbol", "")
@@ -49,6 +50,11 @@ class OrderFlowAgent(BaseAgent):
             return None
 
         underlying = "NIFTY" if "NIFTY" in symbol.upper() and "BANK" not in symbol.upper() else "BANKNIFTY"
+
+        # Route depth snapshots — cache and return (no signal yet)
+        if channel == "depth":
+            self._latest_depth[underlying] = data
+            return None
 
         if underlying not in self._tick_buffer:
             self._tick_buffer[underlying] = deque(maxlen=TICK_WINDOW)
@@ -331,6 +337,52 @@ class OrderFlowAgent(BaseAgent):
 
         return {"acceleration": accel, "delta_change_pct": round(change_pct, 2)}
 
+    def _analyze_book_depth(self, underlying: str) -> dict:
+        """Analyze Dhan's 200-level order book for institutional walls and imbalance."""
+        depth = self._latest_depth.get(underlying)
+        if not depth:
+            return {
+                "book_imbalance": 0.0,
+                "bid_wall_price": 0.0,
+                "bid_wall_qty": 0,
+                "ask_wall_price": 0.0,
+                "ask_wall_qty": 0,
+                "book_thin": False,
+                "top10_bid_qty": 0,
+                "top10_ask_qty": 0,
+            }
+
+        bids = depth.get("bids", [])  # [{"price": float, "quantity": int}, ...]
+        asks = depth.get("asks", [])
+
+        total_bid = sum(b.get("quantity", 0) for b in bids)
+        total_ask = sum(a.get("quantity", 0) for a in asks)
+        total = total_bid + total_ask
+
+        book_imbalance = (total_bid - total_ask) / total if total > 0 else 0.0
+
+        # Largest single order wall
+        bid_wall = max(bids, key=lambda b: b.get("quantity", 0), default={})
+        ask_wall = max(asks, key=lambda a: a.get("quantity", 0), default={})
+
+        # Top-10 level liquidity (how thin is the near book?)
+        top10_bid = sum(b.get("quantity", 0) for b in sorted(bids, key=lambda b: b.get("price", 0), reverse=True)[:10])
+        top10_ask = sum(a.get("quantity", 0) for a in sorted(asks, key=lambda a: a.get("price", 0))[:10])
+
+        # Thin book: top-10 levels have less than 5% of total book
+        book_thin = (top10_bid + top10_ask) < (total * 0.05) if total > 0 else False
+
+        return {
+            "book_imbalance": round(book_imbalance, 4),
+            "bid_wall_price": float(bid_wall.get("price", 0)),
+            "bid_wall_qty": int(bid_wall.get("quantity", 0)),
+            "ask_wall_price": float(ask_wall.get("price", 0)),
+            "ask_wall_qty": int(ask_wall.get("quantity", 0)),
+            "book_thin": book_thin,
+            "top10_bid_qty": top10_bid,
+            "top10_ask_qty": top10_ask,
+        }
+
     def _analyze_flow(self, underlying: str) -> Signal | None:
         ticks = list(self._tick_buffer[underlying])
         if len(ticks) < 20:
@@ -389,6 +441,7 @@ class OrderFlowAgent(BaseAgent):
         self._update_footprint(underlying, ticks)
         footprint_delta = self._calc_footprint_delta(underlying)
         flow_accel = self._flow_acceleration(ticks)
+        depth_analysis = self._analyze_book_depth(underlying)
 
         # === Large lot analysis (existing) ===
         large_lots = self._large_lots.get(underlying, [])
@@ -472,6 +525,21 @@ class OrderFlowAgent(BaseAgent):
         elif imb_ratio < -IMBALANCE_THRESHOLD and direction in ("BEARISH", "NEUTRAL"):
             confidence = min(0.95, confidence + 0.05)
 
+        # === NEW: Order book depth analysis (Dhan 200-level) ===
+        book_imb = depth_analysis["book_imbalance"]
+        if book_imb > 0.2 and direction in ("BULLISH", "NEUTRAL"):
+            confidence = min(0.95, confidence + 0.07)
+            if direction == "NEUTRAL":
+                direction = "BULLISH"
+        elif book_imb < -0.2 and direction in ("BEARISH", "NEUTRAL"):
+            confidence = min(0.95, confidence + 0.07)
+            if direction == "NEUTRAL":
+                direction = "BEARISH"
+
+        # Thin book: price can move fast — reduce confidence in sustained moves
+        if depth_analysis["book_thin"]:
+            confidence = max(0.25, confidence - 0.05)
+
         # === NEW: Flow acceleration boost ===
         if flow_accel["acceleration"] == "ACCELERATING":
             if (direction == "BULLISH" and flow_accel["delta_change_pct"] > 0) or \
@@ -494,7 +562,11 @@ class OrderFlowAgent(BaseAgent):
             f"Bid-ask imbalance: {imb_ratio:+.4f} ({bid_ask_imbalance['dominant_side']}). "
             f"Flow: {flow_accel['acceleration']} ({flow_accel['delta_change_pct']:+.1f}%). "
             f"Delta divergence: {delta_divergence}. "
-            f"Tick momentum — Up: {momentum['upticks']}, Down: {momentum['downticks']}, Streak: {momentum['max_streak']}.{expiry_note}"
+            f"Tick momentum — Up: {momentum['upticks']}, Down: {momentum['downticks']}, Streak: {momentum['max_streak']}. "
+            f"Book depth — Imbalance: {depth_analysis['book_imbalance']:+.4f}, "
+            f"Bid wall: {depth_analysis['bid_wall_qty']}@{depth_analysis['bid_wall_price']:.0f}, "
+            f"Ask wall: {depth_analysis['ask_wall_qty']}@{depth_analysis['ask_wall_price']:.0f}, "
+            f"Thin: {depth_analysis['book_thin']}.{expiry_note}"
         )
 
         return self.create_signal(
@@ -530,5 +602,12 @@ class OrderFlowAgent(BaseAgent):
                 "tick_momentum": momentum,
                 "tick_count": len(ticks),
                 "is_expiry_day": self.is_expiry_day(),
+                "book_imbalance": depth_analysis["book_imbalance"],
+                "bid_wall_price": depth_analysis["bid_wall_price"],
+                "bid_wall_qty": depth_analysis["bid_wall_qty"],
+                "ask_wall_price": depth_analysis["ask_wall_price"],
+                "ask_wall_qty": depth_analysis["ask_wall_qty"],
+                "book_thin": depth_analysis["book_thin"],
+                "depth_available": bool(self._latest_depth.get(underlying)),
             },
         )

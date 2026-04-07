@@ -142,3 +142,11 @@ export interface WSMessage {
   data: unknown;
   timestamp: string;
 }
+
+export interface ZerodhaStatus {
+  authenticated: boolean;
+  user_id?: string;
+  user_name?: string;
+  broker?: string;
+  message?: string;
+}

@@ -98,6 +98,18 @@ class SentimentFeed:
                             **vix,
                             "_merge_key": "vix_data",
                         })
+                        # Also publish VIX as a tick so the frontend can display it
+                        vix_val = vix.get("india_vix", 0)
+                        if vix_val:
+                            from data_pipeline.truedata_feed import TickData
+                            vix_tick = TickData(
+                                symbol="INDIA VIX", ltp=float(vix_val),
+                                bid=0, ask=0, bid_qty=0, ask_qty=0,
+                                volume=0, oi=0,
+                                timestamp=datetime.now(IST).isoformat(),
+                                open=0, high=0, low=0, close=0,
+                            )
+                            await self.publisher.publish_tick(vix_tick)
                         logger.info(f"Published VIX data: {vix.get('india_vix')}")
                 else:
                     logger.warning(f"VIX/indices fetch returned status {resp.status}")

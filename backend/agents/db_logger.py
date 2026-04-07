@@ -34,10 +34,10 @@ def log_agent_vote(trade_id: str, agent_id: str, direction: str,
         import json
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO agent_votes (id, trade_id, agent_id, direction, confidence,
+            """INSERT INTO agent_votes (trade_id, agent_id, direction, confidence,
                weight, weighted_score, reasoning, supporting_data, voted_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (str(uuid.uuid4()), trade_id, agent_id, direction, confidence,
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (trade_id, agent_id, direction, confidence,
              weight, weighted_score, reasoning,
              json.dumps(supporting_data) if supporting_data else None,
              datetime.now(IST)),
@@ -64,11 +64,11 @@ def log_trade_event(trade_id: str, event: str, status: str,
         import json
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO trade_log (id, trade_id, event, status, price, quantity,
+            """INSERT INTO trade_log (trade_id, event, status, price, quantity,
                pnl, agent_votes, consensus_score, risk_approval, risk_reasoning,
                details, timestamp)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (str(uuid.uuid4()), trade_id, event, status, price, quantity, pnl,
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (trade_id, event, status, price, quantity, pnl,
              json.dumps(agent_votes) if agent_votes else None,
              consensus_score, risk_approval, risk_reasoning,
              json.dumps(details) if details else None,
@@ -121,12 +121,12 @@ def insert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
     try:
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO trades (id, trade_id, symbol, underlying, direction,
+            """INSERT INTO trades (trade_id, symbol, underlying, direction,
                entry_price, sl_price, target_price, quantity, status,
                consensus_score, trade_type, created_at, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (trade_id) DO NOTHING""",
-            (str(uuid.uuid4()), trade_id, symbol, underlying, direction,
+            (trade_id, symbol, underlying, direction,
              entry_price, sl_price, target_price, quantity, status,
              consensus_score, trade_type, datetime.now(IST), datetime.now(IST)),
         )
@@ -159,11 +159,11 @@ def upsert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
     try:
         cur = conn.cursor()
         cur.execute(
-            """INSERT INTO trades (id, trade_id, symbol, underlying, direction,
+            """INSERT INTO trades (trade_id, symbol, underlying, direction,
                entry_price, sl_price, target_price, exit_price, quantity, status,
                pnl, exit_reason, consensus_score, trade_type,
                entry_time, exit_time, created_at, updated_at)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (trade_id) DO UPDATE SET
                  status = EXCLUDED.status,
                  quantity = EXCLUDED.quantity,
@@ -177,7 +177,7 @@ def upsert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
                  entry_time = COALESCE(EXCLUDED.entry_time, trades.entry_time),
                  exit_time = COALESCE(EXCLUDED.exit_time, trades.exit_time),
                  updated_at = EXCLUDED.updated_at""",
-            (str(uuid.uuid4()), trade_id, symbol, underlying, direction,
+            (trade_id, symbol, underlying, direction,
              entry_price, sl_price, target_price, exit_price, quantity, status,
              pnl, exit_reason, consensus_score, trade_type,
              entry_time, exit_time, datetime.now(IST), datetime.now(IST)),

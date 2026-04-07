@@ -1,0 +1,71 @@
+{
+  "agents": [
+    {
+      "agent_id": "a7b580d01a723485a",
+      "agent_type": "Explore",
+      "started_at": "2026-04-06T12:31:43.591Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-04-06T12:32:59.843Z",
+      "duration_ms": 76252
+    },
+    {
+      "agent_id": "ad42159d5ca0d86e9",
+      "agent_type": "Explore",
+      "started_at": "2026-04-06T12:54:19.292Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-04-06T12:54:31.950Z",
+      "duration_ms": 12658
+    },
+    {
+      "agent_id": "aebf30abef2ff5e68",
+      "agent_type": "oh-my-claudecode:executor",
+      "started_at": "2026-04-06T12:55:18.598Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-04-06T12:56:32.172Z",
+      "duration_ms": 73574
+    },
+    {
+      "agent_id": "a8b8fb5938c0830e8",
+      "agent_type": "Explore",
+      "started_at": "2026-04-06T13:37:55.818Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-04-06T13:39:47.589Z",
+      "duration_ms": 111771
+    },
+    {
+      "agent_id": "a616205125d9f9785",
+      "agent_type": "Explore",
+      "started_at": "2026-04-07T04:41:44.144Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-04-07T04:43:38.211Z",
+      "duration_ms": 114067
+    },
+    {
+      "agent_id": "a001c77859c29a84b",
+      "agent_type": "Explore",
+      "started_at": "2026-04-07T12:56:09.377Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-04-07T12:57:34.140Z",
+      "duration_ms": 84763
+    },
+    {
+      "agent_id": "a090d5a9be3a66602",
+      "agent_type": "Explore",
+      "started_at": "2026-04-07T12:56:13.739Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-04-07T12:57:22.968Z",
+      "duration_ms": 69229
+    }
+  ],
+  "total_spawned": 7,
+  "total_completed": 7,
+  "total_failed": 0,
+  "last_updated": "2026-04-07T12:57:34.256Z"
+}

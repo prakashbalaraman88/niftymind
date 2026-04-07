@@ -6,7 +6,7 @@ import {
   useFonts,
 } from "@expo-google-fonts/inter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Stack } from "expo-router";
+import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -14,6 +14,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { WebSocketProvider, useWebSocket } from "@/contexts/WebSocketContext";
 import {
   registerForPushNotifications,
@@ -64,11 +65,42 @@ function NotificationWatcher({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function AuthGate() {
+  const { session, initialized } = useAuth();
+  const segments = useSegments();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!initialized) return;
+
+    const firstSegment = segments[0] as string;
+    const isOnLogin = firstSegment === "login";
+    // Don't redirect away from the OAuth callback page — it handles its own navigation
+    const isOnAuthCallback = firstSegment === "auth";
+
+    if (!session && !isOnLogin && !isOnAuthCallback) {
+      // Not signed in — redirect to login
+      router.replace("/login" as never);
+    } else if (session && isOnLogin) {
+      // Signed in — redirect to main app
+      router.replace("/(tabs)" as never);
+    }
+  }, [session, initialized, segments]);
+
+  return null;
+}
+
 function RootLayoutNav() {
   return (
-    <Stack screenOptions={{ headerBackTitle: "Back" }}>
-      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-    </Stack>
+    <>
+      <AuthGate />
+      <Stack screenOptions={{ headerBackTitle: "Back" }}>
+        <Stack.Screen name="login" options={{ headerShown: false }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
+        <Stack.Screen name="zerodha/callback" options={{ headerShown: false, presentation: "modal" }} />
+      </Stack>
+    </>
   );
 }
 
@@ -92,15 +124,17 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
-          <WebSocketProvider>
-            <NotificationWatcher>
-              <GestureHandlerRootView>
-                <KeyboardProvider>
-                  <RootLayoutNav />
-                </KeyboardProvider>
-              </GestureHandlerRootView>
-            </NotificationWatcher>
-          </WebSocketProvider>
+          <AuthProvider>
+            <WebSocketProvider>
+              <NotificationWatcher>
+                <GestureHandlerRootView>
+                  <KeyboardProvider>
+                    <RootLayoutNav />
+                  </KeyboardProvider>
+                </GestureHandlerRootView>
+              </NotificationWatcher>
+            </WebSocketProvider>
+          </AuthProvider>
         </QueryClientProvider>
       </ErrorBoundary>
     </SafeAreaProvider>
