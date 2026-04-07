@@ -1,7 +1,7 @@
 {
   "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"powershell -Command \\\"corepack enable; corepack prepare pnpm@latest --activate\\\" 2>&1 && where pnpm 2>&1\",\"description\":\"Enable pnpm via corepack\"}",
-  "error": "Exit code 1\n\u001b[31m\u001b[1mInternal Error\u001b[22m\u001b[39m: EPERM: operation not permitted, open 'C:\\Users\\Prakash Other\\AppData\\Local\\nvm\\v22.19.0\\yarnpkg'\nError: EPERM: operation not permitted, open 'C:\\Users\\Prakash Other\\AppData\\Local\\nvm\\v22.19.0\\yarnpkg'\nPreparing pnpm@latest for immediate activation...\nINFO: Could not find files for the given pattern(s).",
-  "timestamp": "2026-04-07T13:19:16.034Z",
-  "retry_count": 2
+  "tool_input_preview": "{\"command\":\"cd \\\"D:\\\\Claude Projects\\\\niftymind-main\\\\artifacts\\\\mobile\\\" && npx expo install expo-notifications expo-device expo-background-fetch expo-task-manager --fix 2>&1\",\"timeout\":60000,\"descri...",
+  "error": "Exit code 1\nenv: load .env\nenv: export EXPO_PUBLIC_DOMAIN EXPO_PUBLIC_SUPABASE_URL EXPO_PUBLIC_SUPABASE_ANON_KEY\nThe following packages should be updated for best compatibility with the installed expo version:\n  expo-notifications@55.0.11 - expected version: ~0.32.16\n  expo-device@55.0.9 - expected version: ~8.0.10\n  expo-background-fetch@55.0.12 - expected version: ~14.0.9\n  expo-task-manager@55.0.12 - expected version: ~14.0.9\nYour project may not work correctly until you install the expected ...",
+  "timestamp": "2026-04-07T14:41:18.350Z",
+  "retry_count": 1
 }

@@ -1,7 +1,7 @@
 {
   "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"find \\\"/d/Claude Projects/niftymind-main/backend\\\" -maxdepth 1 -type f -name \\\"*.py\\\" | xargs ls -lh\"}",
-  "error": "Exit code 123\nls: cannot access '/d/Claude': No such file or directory\nls: cannot access 'Projects/niftymind-main/backend/config.py': No such file or directory\nls: cannot access '/d/Claude': No such file or directory\nls: cannot access 'Projects/niftymind-main/backend/main.py': No such file or directory\nls: cannot access '/d/Claude': No such file or directory\nls: cannot access 'Projects/niftymind-main/backend/setup_timescaledb.py': No such file or directory\nls: cannot access '/d/Claude': No such ...",
-  "timestamp": "2026-04-07T12:56:46.516Z",
+  "tool_input_preview": "{\"command\":\"cd \\\"D:\\\\Claude Projects\\\\niftymind-main\\\\backend\\\" && railway logs --limit 30 2>&1\",\"description\":\"Check Railway deployment logs\"}",
+  "error": "Exit code 1\nerror: unexpected argument '--limit' found\n\n  tip: to pass '--limit' as a value, use '-- --limit'\n\nUsage: railway.exe logs [OPTIONS] [DEPLOYMENT_ID]\n\nFor more information, try '--help'.",
+  "timestamp": "2026-04-07T13:30:45.753Z",
   "retry_count": 1
 }
