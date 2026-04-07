@@ -1,7 +1,7 @@
 {
-  "tool_name": "Read",
-  "tool_input_preview": "{\"file_path\":\"D:\\\\Claude Projects\\\\niftymind-main\\\\contexts\\\\AuthContext.tsx\"}",
-  "error": "File does not exist. Note: your current working directory is D:\\Claude Projects\\niftymind-main\\artifacts\\mobile.",
-  "timestamp": "2026-04-06T13:29:07.473Z",
-  "retry_count": 1
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"powershell -Command \\\"corepack enable; corepack prepare pnpm@latest --activate\\\" 2>&1 && where pnpm 2>&1\",\"description\":\"Enable pnpm via corepack\"}",
+  "error": "Exit code 1\n\u001b[31m\u001b[1mInternal Error\u001b[22m\u001b[39m: EPERM: operation not permitted, open 'C:\\Users\\Prakash Other\\AppData\\Local\\nvm\\v22.19.0\\yarnpkg'\nError: EPERM: operation not permitted, open 'C:\\Users\\Prakash Other\\AppData\\Local\\nvm\\v22.19.0\\yarnpkg'\nPreparing pnpm@latest for immediate activation...\nINFO: Could not find files for the given pattern(s).",
+  "timestamp": "2026-04-07T13:19:16.034Z",
+  "retry_count": 2
 }

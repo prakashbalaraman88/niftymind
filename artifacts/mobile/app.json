@@ -17,12 +17,24 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.niftymind.mobile",
       "infoPlist": {
-        "UIBackgroundModes": ["remote-notification"]
+        "UIBackgroundModes": [
+          "remote-notification"
+        ]
       }
     },
     "android": {
       "package": "com.niftymind.mobile",
-      "googleServicesFile": "./google-services.json"
+      "permissions": [
+        "FOREGROUND_SERVICE",
+        "WAKE_LOCK",
+        "RECEIVE_BOOT_COMPLETED",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#0A0E17"
+      }
     },
     "web": {
       "favicon": "./assets/images/icon.png"
@@ -52,8 +64,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "56a1995f-2019-443c-ac6c-4d8db4fb1cda"
       }
-    }
+    },
+    "owner": "prakashb1988"
   }
 }
