@@ -1,0 +1,10 @@
+node_modules/
+.expo/
+*.apk
+*.log
+*.jsonl
+.omc/
+server.log
+fyersApi.log
+fyersRequests.log
+fyersTBTSocket.log

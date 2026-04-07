@@ -7507,3 +7507,65 @@ INFO:     127.0.0.1:55424 - "GET /api/dashboard HTTP/1.1" 200 OK
 2026-04-07 20:05:22 [niftymind.sentiment_feed] INFO: Published VIX data: 24.7
 2026-04-07 20:05:40 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
 2026-04-07 20:05:40 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:06:28 [niftymind.global_macro_feed] INFO: Published global macro data for 10 symbols
+2026-04-07 20:06:40 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:06:40 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:07:42 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:07:42 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:08:43 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:08:43 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:09:43 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:09:43 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:10:26 [niftymind.sentiment_feed] INFO: Published FII/DII data: FII net=-8692.11, DII net=7979.5
+2026-04-07 20:10:27 [niftymind.sentiment_feed] INFO: Published breadth: advances=126, declines=87
+2026-04-07 20:10:29 [niftymind.sentiment_feed] INFO: Published VIX data: 24.7
+2026-04-07 20:10:45 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:10:45 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:11:46 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:11:46 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:12:47 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:12:47 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:13:47 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:13:47 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:14:48 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:14:48 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:15:30 [niftymind.sentiment_feed] INFO: Published FII/DII data: FII net=-8692.11, DII net=7979.5
+2026-04-07 20:15:30 [niftymind.sentiment_feed] INFO: Published breadth: advances=126, declines=87
+2026-04-07 20:15:31 [niftymind.sentiment_feed] INFO: Published VIX data: 24.7
+2026-04-07 20:15:49 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:15:49 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:16:11 [niftymind.news_feed] INFO: Published 1 new articles
+2026-04-07 20:16:11 [niftymind.news_feed] WARNING: Failed to persist news to DB: could not translate host name "db.xeshylqwyheylspzgndx.supabase.co" to address: The requested name is valid, but no data of the requested type was found. 
+
+2026-04-07 20:16:38 [niftymind.global_macro_feed] INFO: Published global macro data for 10 symbols
+2026-04-07 20:16:49 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:16:49 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:17:51 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:17:51 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:18:52 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:18:52 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+Connection closed!
+INFO:     127.0.0.1:58004 - "OPTIONS /api/dashboard HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58004 - "GET /api/dashboard HTTP/1.1" 200 OK
+2026-04-07 20:19:43 [niftymind.fyers_quotes_poller] WARNING: Quotes API error: Bad request
+2026-04-07 20:19:44 [niftymind.redis_publisher] ERROR: Failed to publish to niftymind:agent_status: Error 22 while writing to socket. The network connection was aborted by the local system.
+2026-04-07 20:19:52 [niftymind.dhan_depth_feed] ERROR: Dhan WebSocket error: server rejected WebSocket connection: HTTP 400
+2026-04-07 20:19:52 [niftymind.dhan_depth_feed] INFO: Dhan depth feed reconnecting in 60s...
+2026-04-07 20:20:05 [niftymind.redis_publisher] ERROR: Failed to publish to niftymind:agent_status: Error 22 while writing to socket. The network connection was aborted by the local system.
