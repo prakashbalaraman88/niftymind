@@ -106,15 +106,21 @@ class PaperExecutor:
             await pubsub.aclose()
             logger.info("Paper Executor stopped")
 
+    _SYMBOL_TO_UNDERLYING = {
+        "NIFTY 50": "NIFTY", "NIFTY": "NIFTY", "NIFTY-FUT": "NIFTY",
+        "BANKNIFTY": "BANKNIFTY", "BANKNIFTY-FUT": "BANKNIFTY",
+    }
+
     def _update_price(self, tick: dict):
         symbol = tick.get("symbol", "")
         price = tick.get("ltp") or tick.get("last_price") or tick.get("close")
         if symbol and price:
-            self._latest_prices[symbol] = float(price)
-
-        underlying = tick.get("underlying", "")
-        if underlying:
-            self._latest_prices[underlying] = float(price) if price else self._latest_prices.get(underlying, 0)
+            p = float(price)
+            self._latest_prices[symbol] = p
+            # Map symbol to underlying so open position P&L works
+            underlying = tick.get("underlying") or self._SYMBOL_TO_UNDERLYING.get(symbol, "")
+            if underlying:
+                self._latest_prices[underlying] = p
 
         # Run trailing stop updates for all open positions on every tick
         asyncio.ensure_future(self._run_trailing_stop_updates())

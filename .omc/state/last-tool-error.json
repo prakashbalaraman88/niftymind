@@ -1,7 +1,0 @@
-{
-  "tool_name": "mcp__Claude_in_Chrome__find",
-  "tool_input_preview": "{\"query\":\"Supabase dashboard tab\",\"tabId\":414891243}",
-  "error": "Failed to find element: This page cannot be scripted due to an ExtensionsSettings policy.",
-  "timestamp": "2026-04-08T04:05:24.103Z",
-  "retry_count": 1
-}
