@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import signal
 import sys
 
@@ -23,6 +24,18 @@ def handle_shutdown(sig, frame):
 async def main():
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
+
+    # Paper trading gate: check BEFORE constructing frozen config
+    from learning.paper_trading_gate import PaperTradingGate
+    _gate = PaperTradingGate(int(os.environ.get("PAPER_WARMUP_DAYS", "5")))
+    if _gate.should_force_paper() and os.environ.get("TRADING_MODE", "paper").lower() == "live":
+        _gate_status = _gate.get_status()
+        logger.warning(
+            f"PAPER TRADING GATE: Forcing paper mode. "
+            f"Days: {_gate_status['days_trading']}/{_gate_status['warmup_days_required']}, "
+            f"Lessons: {_gate_status['lessons_accumulated']}/{_gate_status['lessons_required']}"
+        )
+        os.environ["TRADING_MODE"] = "paper"
 
     try:
         config = AppConfig()
@@ -121,18 +134,6 @@ async def main():
         from learning.trade_outcome_model import TradeOutcomeModel
         from learning.post_trade_analyzer import PostTradeAnalyzer
         from learning.daily_retrainer import DailyRetrainer
-        from learning.paper_trading_gate import PaperTradingGate
-
-        gate = PaperTradingGate(config.learning.paper_warmup_days)
-        gate_status = gate.get_status()
-        if gate.should_force_paper() and config.trading.mode == "live":
-            logger.warning(
-                f"PAPER TRADING GATE: Forcing paper mode. "
-                f"Days: {gate_status['days_trading']}/{gate_status['warmup_days_required']}, "
-                f"Lessons: {gate_status['lessons_accumulated']}/{gate_status['lessons_required']}"
-            )
-            import os
-            os.environ["TRADING_MODE"] = "paper"
 
         accuracy_tracker = AgentAccuracyTracker(config.learning)
         pre_trade_recall = PreTradeRecall()

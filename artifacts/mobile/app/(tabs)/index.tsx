@@ -61,7 +61,9 @@ export default function DashboardScreen() {
   const vixTick = ticks["INDIA VIX"] || ticks["VIX"] || ticks["India VIX"];
 
   const tradingMode = data?.trading_mode || "paper";
-  const totalPnl = data?.executor?.today_pnl ?? data?.executor?.total_pnl ?? 0;
+  const dailyPnl = data?.executor?.daily_pnl ?? data?.executor?.today_pnl ?? 0;
+  const unrealizedPnl = data?.positions?.tracker?.total_unrealized_pnl ?? 0;
+  const totalPnl = dailyPnl + unrealizedPnl;
   const openPositions = data?.positions?.open || [];
   const capital = data?.capital ?? 500000;
   const vixHalt = data?.risk_limits?.vix_halt_threshold ?? 25;

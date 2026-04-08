@@ -369,15 +369,25 @@ class ConsensusOrchestrator(BaseAgent):
         return f"{year_short}{month_abbr}{expiry.day:02d}"
 
     def _determine_underlying(self) -> str:
-        nifty_count = 0
-        banknifty_count = 0
+        """Determine underlying based on signal confidence-weighted votes.
+        Also considers if we already have NIFTY positions — prefer BANKNIFTY for diversification."""
+        nifty_score = 0.0
+        banknifty_score = 0.0
         for sig in self._latest_signals.values():
             u = sig.get("underlying", "NIFTY").upper()
+            conf = float(sig.get("confidence", 0.5))
             if "BANK" in u:
-                banknifty_count += 1
+                banknifty_score += conf
             else:
-                nifty_count += 1
-        return "BANKNIFTY" if banknifty_count > nifty_count else "NIFTY"
+                nifty_score += conf
+        # If scores are close (within 20%), check options chain availability
+        if banknifty_score > 0 and abs(nifty_score - banknifty_score) / max(nifty_score, banknifty_score, 0.01) < 0.2:
+            # Prefer the one with options data available
+            if "BANKNIFTY" in self._latest_options and "NIFTY" not in self._latest_options:
+                return "BANKNIFTY"
+            if "NIFTY" in self._latest_options and "BANKNIFTY" not in self._latest_options:
+                return "NIFTY"
+        return "BANKNIFTY" if banknifty_score > nifty_score else "NIFTY"
 
     def _expire_stale_signals(self):
         now = datetime.now(IST)

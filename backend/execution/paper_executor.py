@@ -148,20 +148,25 @@ class PaperExecutor:
         if quantity <= 0:
             quantity = int(data.get("supporting_data", {}).get("quantity", 0)) or lot_size
 
-        # Use options premium if strike was selected, otherwise use index price
+        # Resolve symbol FIRST (before using it in position dict)
         supporting = data.get("supporting_data", {})
         selected_strike = supporting.get("selected_strike")
+        symbol = data.get("symbol") or supporting.get("symbol") or f"{underlying} OPT"
+
+        # Use options premium if strike was selected, otherwise use index price
         if selected_strike and selected_strike.get("ltp", 0) > 0:
             fill_price = float(selected_strike["ltp"])
-            logger.info(f"Using options premium ₹{fill_price} for {trade_id}")
+            logger.info(f"Using options premium ₹{fill_price} for {trade_id} ({symbol})")
         elif supporting.get("entry_premium", 0) > 0:
             fill_price = float(supporting["entry_premium"])
-            logger.info(f"Using entry_premium ₹{fill_price} for {trade_id}")
+            logger.info(f"Using entry_premium ₹{fill_price} for {trade_id} ({symbol})")
         else:
             fill_price = self._latest_prices.get(underlying, 0)
             if fill_price <= 0:
                 logger.error(f"No price available for {underlying} — cannot execute {trade_id}")
                 return
+
+        is_options = selected_strike is not None or supporting.get("entry_premium", 0) > 0
 
         slippage = fill_price * 0.0005
         if self._is_long(direction):
@@ -178,17 +183,18 @@ class PaperExecutor:
             "direction": direction,
             "quantity": quantity,
             "entry_price": fill_price,
+            "entry_index_price": self._latest_prices.get(underlying, 0),
             "trade_type": trade_type,
             "entry_time": datetime.now(IST).isoformat(),
             "status": "OPEN",
             "unrealized_pnl": 0.0,
-            "is_options": selected_strike is not None,
+            "is_options": is_options,
         }
         self._positions[trade_id] = position
 
         # Create a TradePosition for trailing stop management
-        sl_points = float(data.get("sl_points", data.get("supporting_data", {}).get("sl_points", 20)))
-        atr = float(data.get("atr", data.get("supporting_data", {}).get("atr", 0)))
+        sl_points = float(supporting.get("sl_points", data.get("sl_points", 20)))
+        atr = float(supporting.get("atr", data.get("atr", 0)))
         if self._is_long(direction):
             sl_price = fill_price - sl_points
         else:
@@ -203,8 +209,6 @@ class PaperExecutor:
             trail_atr=atr,
         )
         self._trade_positions[trade_id] = trade_pos
-
-        symbol = data.get("symbol") or data.get("supporting_data", {}).get("symbol") or f"{underlying} OPT"
         upsert_trade(
             trade_id=trade_id,
             symbol=symbol,
@@ -266,7 +270,24 @@ class PaperExecutor:
         quantity = position["quantity"]
         entry_price = position["entry_price"]
 
-        exit_price = self._latest_prices.get(underlying, entry_price)
+        is_options = position.get("is_options", False)
+
+        if is_options:
+            # For options: estimate exit premium from index move using ~0.5 delta
+            index_price = self._latest_prices.get(underlying, 0)
+            # Get entry index price if we stored it, else approximate
+            entry_index = position.get("entry_index_price", index_price)
+            if index_price > 0 and entry_index > 0:
+                index_move = index_price - entry_index
+                delta = 0.5  # approximate ATM delta
+                if not self._is_long(direction):
+                    index_move = -index_move  # PE gains when index falls
+                premium_change = index_move * delta
+                exit_price = max(0.05, entry_price + premium_change)
+            else:
+                exit_price = entry_price  # fallback: flat exit
+        else:
+            exit_price = self._latest_prices.get(underlying, entry_price)
 
         slippage = exit_price * 0.0005
         if self._is_long(direction):
@@ -502,12 +523,30 @@ class PaperExecutor:
     def get_open_positions(self) -> list[dict]:
         for pos in self._positions.values():
             underlying = pos["underlying"]
-            current_price = self._latest_prices.get(underlying, pos["entry_price"])
-            if self._is_long(pos["direction"]):
-                pos["unrealized_pnl"] = round((current_price - pos["entry_price"]) * pos["quantity"], 2)
+            entry_price = pos["entry_price"]
+            is_options = pos.get("is_options", False)
+
+            if is_options:
+                # Estimate current premium from index movement
+                index_price = self._latest_prices.get(underlying, 0)
+                entry_index = pos.get("entry_index_price", index_price)
+                if index_price > 0 and entry_index > 0:
+                    index_move = index_price - entry_index
+                    delta = 0.5
+                    if not self._is_long(pos["direction"]):
+                        index_move = -index_move
+                    current_premium = max(0.05, entry_price + index_move * delta)
+                else:
+                    current_premium = entry_price
+                pos["current_price"] = round(current_premium, 2)
+                pos["unrealized_pnl"] = round((current_premium - entry_price) * pos["quantity"], 2)
             else:
-                pos["unrealized_pnl"] = round((pos["entry_price"] - current_price) * pos["quantity"], 2)
-            pos["current_price"] = current_price
+                current_price = self._latest_prices.get(underlying, entry_price)
+                pos["current_price"] = current_price
+                if self._is_long(pos["direction"]):
+                    pos["unrealized_pnl"] = round((current_price - entry_price) * pos["quantity"], 2)
+                else:
+                    pos["unrealized_pnl"] = round((entry_price - current_price) * pos["quantity"], 2)
         return list(self._positions.values())
 
     def get_stats(self) -> dict:

@@ -1,0 +1,7 @@
+{
+  "tool_name": "mcp__plugin_oh-my-claudecode_t__lsp_document_symbols",
+  "tool_input_preview": "{\"file\":\"/d/Claude Projects/niftymind-main/backend/config.py\"}",
+  "error": "Language server 'pylsp' not found.\nInstall with: pip install python-lsp-server",
+  "timestamp": "2026-04-08T09:09:45.708Z",
+  "retry_count": 4
+}

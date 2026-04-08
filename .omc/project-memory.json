@@ -157,62 +157,62 @@
   "hotPaths": [
     {
       "path": "backend\\execution\\paper_executor.py",
-      "accessCount": 33,
-      "lastAccessed": 1775638166061,
-      "type": "file"
-    },
-    {
-      "path": "backend\\main.py",
-      "accessCount": 26,
-      "lastAccessed": 1775619902974,
-      "type": "file"
-    },
-    {
-      "path": "backend\\data_pipeline\\truedata_feed.py",
-      "accessCount": 23,
-      "lastAccessed": 1775538684361,
+      "accessCount": 50,
+      "lastAccessed": 1775639825159,
       "type": "file"
     },
     {
       "path": "backend",
-      "accessCount": 19,
-      "lastAccessed": 1775637441725,
+      "accessCount": 35,
+      "lastAccessed": 1775638409723,
       "type": "directory"
     },
     {
-      "path": "backend\\data_pipeline\\fyers_tbt_feed.py",
-      "accessCount": 18,
-      "lastAccessed": 1775534010488,
+      "path": "backend\\main.py",
+      "accessCount": 34,
+      "lastAccessed": 1775639672885,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline\\truedata_feed.py",
+      "accessCount": 26,
+      "lastAccessed": 1775638402132,
       "type": "file"
     },
     {
       "path": "backend\\api\\routes.py",
-      "accessCount": 18,
-      "lastAccessed": 1775620519123,
+      "accessCount": 25,
+      "lastAccessed": 1775639490254,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline\\fyers_tbt_feed.py",
+      "accessCount": 19,
+      "lastAccessed": 1775638260948,
       "type": "file"
     },
     {
       "path": "",
-      "accessCount": 14,
-      "lastAccessed": 1775619886677,
+      "accessCount": 17,
+      "lastAccessed": 1775638294316,
       "type": "directory"
     },
     {
+      "path": "backend\\config.py",
+      "accessCount": 17,
+      "lastAccessed": 1775639613797,
+      "type": "file"
+    },
+    {
       "path": "backend\\data_pipeline\\redis_publisher.py",
-      "accessCount": 13,
-      "lastAccessed": 1775620458381,
+      "accessCount": 15,
+      "lastAccessed": 1775638417635,
       "type": "file"
     },
     {
       "path": "backend\\.env",
-      "accessCount": 10,
-      "lastAccessed": 1775532808352,
-      "type": "file"
-    },
-    {
-      "path": "backend\\config.py",
-      "accessCount": 10,
-      "lastAccessed": 1775619911777,
+      "accessCount": 11,
+      "lastAccessed": 1775638268052,
       "type": "file"
     },
     {
@@ -235,8 +235,20 @@
     },
     {
       "path": "backend\\agents\\base_agent.py",
+      "accessCount": 9,
+      "lastAccessed": 1775638261405,
+      "type": "file"
+    },
+    {
+      "path": "artifacts\\mobile\\lib\\api.ts",
       "accessCount": 8,
-      "lastAccessed": 1775539795659,
+      "lastAccessed": 1775638271925,
+      "type": "file"
+    },
+    {
+      "path": "backend\\api\\server.py",
+      "accessCount": 8,
+      "lastAccessed": 1775639628773,
       "type": "file"
     },
     {
@@ -252,15 +264,9 @@
       "type": "file"
     },
     {
-      "path": "artifacts\\mobile\\lib\\api.ts",
-      "accessCount": 6,
-      "lastAccessed": 1775619860413,
-      "type": "file"
-    },
-    {
       "path": "backend\\requirements.txt",
-      "accessCount": 5,
-      "lastAccessed": 1775471394942,
+      "accessCount": 6,
+      "lastAccessed": 1775638269113,
       "type": "file"
     },
     {
@@ -273,12 +279,6 @@
       "path": "backend\\data_pipeline\\fyers_warmup.py",
       "accessCount": 5,
       "lastAccessed": 1775534052858,
-      "type": "file"
-    },
-    {
-      "path": "backend\\api\\server.py",
-      "accessCount": 5,
-      "lastAccessed": 1775620482813,
       "type": "file"
     },
     {
@@ -306,6 +306,18 @@
       "type": "file"
     },
     {
+      "path": "backend\\agents\\technical_agent.py",
+      "accessCount": 3,
+      "lastAccessed": 1775638262296,
+      "type": "file"
+    },
+    {
+      "path": "backend\\api",
+      "accessCount": 3,
+      "lastAccessed": 1775638313346,
+      "type": "directory"
+    },
+    {
       "path": "C:\\Users\\Prakash Other\\.claude\\projects\\D--Claude-Projects-niftymind-main\\memory\\data_feed_decision.md",
       "accessCount": 2,
       "lastAccessed": 1775269394370,
@@ -321,12 +333,6 @@
       "path": "backend\\scripts\\generate_fyers_token.py",
       "accessCount": 2,
       "lastAccessed": 1775477849319,
-      "type": "file"
-    },
-    {
-      "path": "backend\\agents\\technical_agent.py",
-      "accessCount": 2,
-      "lastAccessed": 1775478731655,
       "type": "file"
     },
     {
@@ -354,15 +360,21 @@
       "type": "file"
     },
     {
-      "path": "backend\\api",
-      "accessCount": 2,
-      "lastAccessed": 1775533607446,
-      "type": "directory"
-    },
-    {
       "path": "backend\\agents\\options_chain_agent.py",
       "accessCount": 2,
       "lastAccessed": 1775536472396,
+      "type": "file"
+    },
+    {
+      "path": "backend\\railway.toml",
+      "accessCount": 2,
+      "lastAccessed": 1775638268842,
+      "type": "file"
+    },
+    {
+      "path": "artifacts\\mobile\\app\\(tabs)\\news.tsx",
+      "accessCount": 2,
+      "lastAccessed": 1775638270798,
       "type": "file"
     },
     {
@@ -381,12 +393,6 @@
       "path": "C:\\Users\\Prakash Other\\.claude\\projects\\D--Claude-Projects-niftymind-main\\memory\\railway_deployment.md",
       "accessCount": 1,
       "lastAccessed": 1775269367581,
-      "type": "file"
-    },
-    {
-      "path": "backend\\railway.toml",
-      "accessCount": 1,
-      "lastAccessed": 1775270323299,
       "type": "file"
     },
     {
@@ -448,12 +454,6 @@
       "accessCount": 1,
       "lastAccessed": 1775532191851,
       "type": "directory"
-    },
-    {
-      "path": "artifacts\\mobile\\app\\(tabs)\\news.tsx",
-      "accessCount": 1,
-      "lastAccessed": 1775532197355,
-      "type": "file"
     }
   ],
   "userDirectives": []

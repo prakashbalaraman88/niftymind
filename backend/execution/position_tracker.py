@@ -97,13 +97,18 @@ class PositionTracker:
 
             broker_manages_sl_target = (executor == "kite" and variety == "bo")
 
+            is_long = direction.upper() in ("BULLISH", "LONG", "BUY")
+            is_options = entry_price < 1000  # Options premiums are typically under ₹1000
+
             if not sl_price:
-                sl_offset = entry_price * 0.02
-                sl_price = (entry_price - sl_offset) if direction == "BULLISH" else (entry_price + sl_offset)
+                sl_pct = 0.30 if is_options else 0.02  # 30% SL on premium, 2% on index
+                sl_offset = entry_price * sl_pct
+                sl_price = (entry_price - sl_offset) if is_long else (entry_price + sl_offset)
 
             if not target_price:
-                target_offset = entry_price * 0.04
-                target_price = (entry_price + target_offset) if direction == "BULLISH" else (entry_price - target_offset)
+                tgt_pct = 0.50 if is_options else 0.04  # 50% target on premium, 4% on index
+                target_offset = entry_price * tgt_pct
+                target_price = (entry_price + target_offset) if is_long else (entry_price - target_offset)
 
             if broker_manages_sl_target:
                 self._broker_managed_exits.add(trade_id)
@@ -122,6 +127,7 @@ class PositionTracker:
                 "status": "OPEN",
                 "peak_pnl": 0.0,
                 "trough_pnl": 0.0,
+                "is_options": is_options,
             }
             logger.info(f"Tracking position: {trade_id} SL={sl_price:.2f} Target={target_price:.2f} broker_managed={broker_manages_sl_target}")
 
@@ -158,7 +164,7 @@ class PositionTracker:
             if trade_type in ("SCALP", "INTRADAY") and current_time >= EOD_SQUARE_OFF:
                 fallback_price = current_price if current_price is not None else entry_price
                 unrealized = 0.0
-                if direction == "BULLISH":
+                if direction.upper() in ("BULLISH", "LONG", "BUY"):
                     unrealized = (fallback_price - entry_price) * pos["quantity"]
                 else:
                     unrealized = (entry_price - fallback_price) * pos["quantity"]
@@ -168,7 +174,10 @@ class PositionTracker:
             if current_price is None:
                 continue
 
-            if direction == "BULLISH":
+            is_long = direction.upper() in ("BULLISH", "LONG", "BUY")
+            is_options_pos = pos.get("is_options", False)
+
+            if is_long:
                 unrealized = (current_price - entry_price) * pos["quantity"]
             else:
                 unrealized = (entry_price - current_price) * pos["quantity"]
@@ -179,9 +188,14 @@ class PositionTracker:
             if is_broker_managed:
                 continue
 
+            # For options: SL/target is managed by trailing stop in paper_executor
+            # (we don't have live options premium ticks to compare against)
+            if is_options_pos:
+                continue
+
             exit_reason = None
 
-            if direction == "BULLISH":
+            if is_long:
                 if current_price <= sl_price:
                     exit_reason = "SL_HIT"
                 elif current_price >= target_price:
@@ -246,7 +260,7 @@ class PositionTracker:
         for pos in self._positions.values():
             underlying = pos["underlying"]
             current_price = self._latest_prices.get(underlying, pos["entry_price"])
-            if pos["direction"] == "BULLISH":
+            if pos["direction"].upper() in ("BULLISH", "LONG", "BUY"):
                 unrealized = round((current_price - pos["entry_price"]) * pos["quantity"], 2)
             else:
                 unrealized = round((pos["entry_price"] - current_price) * pos["quantity"], 2)

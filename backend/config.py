@@ -188,7 +188,7 @@ class TradingConfig:
     )
 
 
-NIFTY_LOT_SIZE = 50
+NIFTY_LOT_SIZE = 25
 BANKNIFTY_LOT_SIZE = 15
 
 

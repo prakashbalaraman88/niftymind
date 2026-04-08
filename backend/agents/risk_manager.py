@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agents.base_agent import BaseAgent, Signal, IST
 from agents import db_logger
+from agents.db_logger import _normalize_direction
 from config import NIFTY_LOT_SIZE, BANKNIFTY_LOT_SIZE
 from risk.drawdown_manager import DrawdownManager
 
@@ -66,7 +67,7 @@ class RiskManager(BaseAgent):
             self._open_positions.append({
                 "trade_id": trade_id,
                 "underlying": data.get("underlying", "NIFTY"),
-                "direction": data.get("direction", ""),
+                "direction": _normalize_direction(data.get("direction", "")),
                 "quantity": data.get("quantity", 0),
                 "entry_price": data.get("price", 0),
                 "status": "OPEN",
@@ -85,7 +86,7 @@ class RiskManager(BaseAgent):
         trade_id = data.get("supporting_data", {}).get("trade_id", data.get("trade_id", f"UNKNOWN-{uuid.uuid4().hex[:8]}"))
         trade_type = data.get("supporting_data", {}).get("trade_type", data.get("timeframe", "INTRADAY"))
         underlying = data.get("underlying", "NIFTY")
-        direction = data.get("direction", "NEUTRAL")
+        direction = _normalize_direction(data.get("direction", "NEUTRAL"))
         confidence = float(data.get("confidence", 0))
         quantity = int(data.get("supporting_data", {}).get("quantity", 0))
         sl_points = float(data.get("supporting_data", {}).get("sl_points", 20))
