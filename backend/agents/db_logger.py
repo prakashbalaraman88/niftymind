@@ -20,6 +20,24 @@ _DIRECTION_MAP = {"BULLISH": "LONG", "BEARISH": "SHORT", "BUY": "LONG", "SELL": 
 def _normalize_direction(direction: str) -> str:
     return _DIRECTION_MAP.get(direction.upper(), direction) if direction else direction
 
+
+# DB constraint: status must be PENDING/OPEN/CLOSED/CANCELLED
+_STATUS_MAP = {"VETOED": "CANCELLED", "FILLED": "OPEN", "PROPOSED": "PENDING"}
+
+
+def _normalize_status(status: str) -> str:
+    return _STATUS_MAP.get(status.upper(), status) if status else status
+
+
+def _normalize_risk_approval(value) -> bool | None:
+    """Convert risk_approval to boolean for DB."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    s = str(value).upper()
+    return s in ("APPROVED", "TRUE", "YES", "1")
+
 # Write-Ahead Log: trades that failed DB persistence are saved here
 _WAL_DIR = Path(os.path.dirname(__file__)).parent / "data" / "wal"
 _WAL_DIR.mkdir(parents=True, exist_ok=True)
@@ -154,7 +172,7 @@ def log_trade_event(trade_id: str, event: str, status: str,
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
     params = (trade_id, event, status, price, quantity, pnl,
               json.dumps(agent_votes) if agent_votes else None,
-              consensus_score, risk_approval, risk_reasoning,
+              consensus_score, _normalize_risk_approval(risk_approval), risk_reasoning,
               json.dumps(details) if details else None,
               datetime.now(IST))
     _execute_with_retry("log_trade_event", sql, params, max_retries=2)
@@ -179,6 +197,7 @@ def insert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
                  target_price: float | None = None,
                  status: str = "PROPOSED"):
     direction = _normalize_direction(direction)
+    status = _normalize_status(status)
     sql = """INSERT INTO trades (trade_id, symbol, underlying, direction,
                entry_price, sl_price, target_price, quantity, status,
                consensus_score, trade_type, created_at, updated_at)
@@ -209,6 +228,7 @@ def upsert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
                  exit_time: str | None = None,
                  status: str = "PROPOSED"):
     direction = _normalize_direction(direction)
+    status = _normalize_status(status)
     sql = """INSERT INTO trades (trade_id, symbol, underlying, direction,
                entry_price, sl_price, target_price, exit_price, quantity, status,
                pnl, exit_reason, consensus_score, trade_type,
