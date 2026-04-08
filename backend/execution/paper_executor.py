@@ -146,11 +146,22 @@ class PaperExecutor:
 
         lot_size = BANKNIFTY_LOT_SIZE if underlying == "BANKNIFTY" else NIFTY_LOT_SIZE
         if quantity <= 0:
-            quantity = lot_size
+            quantity = int(data.get("supporting_data", {}).get("quantity", 0)) or lot_size
 
-        fill_price = self._latest_prices.get(underlying, 0)
-        if fill_price <= 0:
-            fill_price = 22000 if underlying == "NIFTY" else 48000
+        # Use options premium if strike was selected, otherwise use index price
+        supporting = data.get("supporting_data", {})
+        selected_strike = supporting.get("selected_strike")
+        if selected_strike and selected_strike.get("ltp", 0) > 0:
+            fill_price = float(selected_strike["ltp"])
+            logger.info(f"Using options premium ₹{fill_price} for {trade_id}")
+        elif supporting.get("entry_premium", 0) > 0:
+            fill_price = float(supporting["entry_premium"])
+            logger.info(f"Using entry_premium ₹{fill_price} for {trade_id}")
+        else:
+            fill_price = self._latest_prices.get(underlying, 0)
+            if fill_price <= 0:
+                logger.error(f"No price available for {underlying} — cannot execute {trade_id}")
+                return
 
         slippage = fill_price * 0.0005
         if self._is_long(direction):
@@ -162,6 +173,7 @@ class PaperExecutor:
 
         position = {
             "trade_id": trade_id,
+            "symbol": symbol,
             "underlying": underlying,
             "direction": direction,
             "quantity": quantity,
@@ -170,6 +182,7 @@ class PaperExecutor:
             "entry_time": datetime.now(IST).isoformat(),
             "status": "OPEN",
             "unrealized_pnl": 0.0,
+            "is_options": selected_strike is not None,
         }
         self._positions[trade_id] = position
 
@@ -191,7 +204,7 @@ class PaperExecutor:
         )
         self._trade_positions[trade_id] = trade_pos
 
-        symbol = data.get("symbol", f"{underlying} OPT")
+        symbol = data.get("symbol") or data.get("supporting_data", {}).get("symbol") or f"{underlying} OPT"
         upsert_trade(
             trade_id=trade_id,
             symbol=symbol,

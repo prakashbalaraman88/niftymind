@@ -7,6 +7,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from agents.base_agent import BaseAgent, Signal, IST
 from agents import db_logger
+from agents.strike_selector import StrikeSelector
+from config import NIFTY_LOT_SIZE, BANKNIFTY_LOT_SIZE
 
 SIGNAL_TTL_SECONDS = 300
 
@@ -100,16 +102,27 @@ class ConsensusOrchestrator(BaseAgent):
         self._accuracy_tracker = accuracy_tracker
         self._pre_trade_recall = pre_trade_recall
         self._outcome_model = outcome_model
+        self._strike_selector = StrikeSelector(capital=100000)
+        self._latest_options: dict[str, list] = {}  # underlying -> options chain
+        self._latest_spot: dict[str, float] = {}  # underlying -> spot price
 
     @property
     def subscribed_channels(self) -> list[str]:
-        return ["signals", "market_breadth"]
+        return ["signals", "market_breadth", "options_chain"]
 
     async def process_message(self, channel: str, data: dict) -> Signal | None:
         if "market_breadth" in channel:
             vix = data.get("india_vix")
             if vix is not None:
                 self._current_vix = float(vix)
+            return None
+
+        if "options_chain" in channel:
+            underlying = data.get("underlying", "NIFTY")
+            self._latest_options[underlying] = data.get("options", [])
+            spot = data.get("spot_price", 0)
+            if spot > 0:
+                self._latest_spot[underlying] = spot
             return None
 
         agent_id = data.get("agent_id", "")
@@ -177,6 +190,40 @@ class ConsensusOrchestrator(BaseAgent):
         trade_id = f"CONSENSUS-{trade_type}-{uuid.uuid4().hex[:8]}"
         self._log_votes_to_db(trade_id, trade_type, vote_details, underlying, direction, abs(score))
 
+        # Select options strike
+        lot_size = BANKNIFTY_LOT_SIZE if underlying == "BANKNIFTY" else NIFTY_LOT_SIZE
+        options_data = self._latest_options.get(underlying, [])
+        spot_price = self._latest_spot.get(underlying, 0)
+        option_type = "CE" if direction == "BULLISH" else "PE"
+
+        selected_strike = None
+        if options_data and spot_price > 0:
+            selected_strike = self._strike_selector.select_strike(
+                strategy=trade_type,
+                direction=direction,
+                spot_price=spot_price,
+                options=options_data,
+                underlying=underlying,
+                confidence=min(1.0, abs(score)),
+            )
+
+        if selected_strike:
+            symbol = f"{underlying}{self._format_expiry()}{int(selected_strike['strike'])}{selected_strike['option_type']}"
+            entry_premium = selected_strike["ltp"]
+            sl_points = round(entry_premium * 0.30, 1)  # 30% SL on premium
+            target_points = round(entry_premium * 0.50, 1)  # 50% target on premium
+            self.logger.info(
+                f"Strike selected for {trade_id}: {symbol} premium=₹{entry_premium:.1f} "
+                f"SL=₹{sl_points:.1f} Target=₹{target_points:.1f}"
+            )
+        else:
+            # Fallback: use ATM strike estimate (no options chain available)
+            symbol = f"{underlying} {option_type}"
+            entry_premium = 0
+            sl_points = 20
+            target_points = 40
+            self.logger.warning(f"No options chain for strike selection — using fallback for {trade_id}")
+
         proposal = {
             "agent_id": self.agent_id,
             "underlying": underlying,
@@ -200,6 +247,14 @@ class ConsensusOrchestrator(BaseAgent):
                 "agents_reporting": len(self._latest_signals),
                 "is_expiry_day": self.is_expiry_day(),
                 "vix_at_entry": self._current_vix,
+                "symbol": symbol,
+                "option_type": option_type,
+                "quantity": lot_size,
+                "sl_points": sl_points,
+                "target_points": target_points,
+                "selected_strike": selected_strike,
+                "entry_premium": entry_premium,
+                "spot_price": spot_price,
             },
         }
 
@@ -299,6 +354,19 @@ class ConsensusOrchestrator(BaseAgent):
 
         consensus_direction = "BULLISH" if weighted_score > 0 else "BEARISH"
         return weighted_score, consensus_direction, vote_details
+
+    def _format_expiry(self) -> str:
+        """Format current weekly expiry for options symbol e.g. '26APR' or '2640710'."""
+        from calendar import monthrange
+        now = datetime.now(IST)
+        year_short = str(now.year)[-2:]
+        month_abbr = now.strftime("%b").upper()
+        # Find next Thursday (weekly expiry)
+        days_ahead = (3 - now.weekday()) % 7  # Thursday = 3
+        if days_ahead == 0 and now.hour >= 15:
+            days_ahead = 7
+        expiry = now + timedelta(days=days_ahead)
+        return f"{year_short}{month_abbr}{expiry.day:02d}"
 
     def _determine_underlying(self) -> str:
         nifty_count = 0

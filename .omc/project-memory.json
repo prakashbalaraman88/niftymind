@@ -157,8 +157,8 @@
   "hotPaths": [
     {
       "path": "backend\\execution\\paper_executor.py",
-      "accessCount": 27,
-      "lastAccessed": 1775628149601,
+      "accessCount": 33,
+      "lastAccessed": 1775638166061,
       "type": "file"
     },
     {
@@ -174,16 +174,16 @@
       "type": "file"
     },
     {
+      "path": "backend",
+      "accessCount": 19,
+      "lastAccessed": 1775637441725,
+      "type": "directory"
+    },
+    {
       "path": "backend\\data_pipeline\\fyers_tbt_feed.py",
       "accessCount": 18,
       "lastAccessed": 1775534010488,
       "type": "file"
-    },
-    {
-      "path": "backend",
-      "accessCount": 18,
-      "lastAccessed": 1775619905165,
-      "type": "directory"
     },
     {
       "path": "backend\\api\\routes.py",
@@ -288,6 +288,12 @@
       "type": "file"
     },
     {
+      "path": "backend\\agents\\scalping_agent.py",
+      "accessCount": 4,
+      "lastAccessed": 1775637511236,
+      "type": "file"
+    },
+    {
       "path": "backend\\test_truedata_connection.py",
       "accessCount": 3,
       "lastAccessed": 1775478738333,
@@ -357,12 +363,6 @@
       "path": "backend\\agents\\options_chain_agent.py",
       "accessCount": 2,
       "lastAccessed": 1775536472396,
-      "type": "file"
-    },
-    {
-      "path": "backend\\agents\\scalping_agent.py",
-      "accessCount": 2,
-      "lastAccessed": 1775539576136,
       "type": "file"
     },
     {
