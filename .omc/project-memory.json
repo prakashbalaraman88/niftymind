@@ -157,8 +157,8 @@
   "hotPaths": [
     {
       "path": "backend\\main.py",
-      "accessCount": 25,
-      "lastAccessed": 1775535106839,
+      "accessCount": 26,
+      "lastAccessed": 1775619902974,
       "type": "file"
     },
     {
@@ -174,21 +174,45 @@
       "type": "file"
     },
     {
-      "path": "backend\\data_pipeline\\redis_publisher.py",
-      "accessCount": 11,
-      "lastAccessed": 1775536517394,
-      "type": "file"
+      "path": "backend",
+      "accessCount": 18,
+      "lastAccessed": 1775619905165,
+      "type": "directory"
     },
     {
       "path": "backend\\api\\routes.py",
-      "accessCount": 11,
-      "lastAccessed": 1775537306945,
+      "accessCount": 18,
+      "lastAccessed": 1775620519123,
+      "type": "file"
+    },
+    {
+      "path": "backend\\execution\\paper_executor.py",
+      "accessCount": 16,
+      "lastAccessed": 1775620104757,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 14,
+      "lastAccessed": 1775619886677,
+      "type": "directory"
+    },
+    {
+      "path": "backend\\data_pipeline\\redis_publisher.py",
+      "accessCount": 13,
+      "lastAccessed": 1775620458381,
       "type": "file"
     },
     {
       "path": "backend\\.env",
       "accessCount": 10,
       "lastAccessed": 1775532808352,
+      "type": "file"
+    },
+    {
+      "path": "backend\\config.py",
+      "accessCount": 10,
+      "lastAccessed": 1775619911777,
       "type": "file"
     },
     {
@@ -210,30 +234,6 @@
       "type": "file"
     },
     {
-      "path": "backend\\execution\\paper_executor.py",
-      "accessCount": 9,
-      "lastAccessed": 1775537204596,
-      "type": "file"
-    },
-    {
-      "path": "",
-      "accessCount": 8,
-      "lastAccessed": 1775532673207,
-      "type": "directory"
-    },
-    {
-      "path": "backend\\config.py",
-      "accessCount": 8,
-      "lastAccessed": 1775534928112,
-      "type": "file"
-    },
-    {
-      "path": "backend",
-      "accessCount": 8,
-      "lastAccessed": 1775538495386,
-      "type": "directory"
-    },
-    {
       "path": "backend\\agents\\base_agent.py",
       "accessCount": 8,
       "lastAccessed": 1775539795659,
@@ -249,6 +249,12 @@
       "path": "backend\\data_pipeline\\options_chain_feed.py",
       "accessCount": 6,
       "lastAccessed": 1775479684584,
+      "type": "file"
+    },
+    {
+      "path": "artifacts\\mobile\\lib\\api.ts",
+      "accessCount": 6,
+      "lastAccessed": 1775619860413,
       "type": "file"
     },
     {
@@ -270,9 +276,15 @@
       "type": "file"
     },
     {
-      "path": "artifacts\\mobile\\lib\\api.ts",
+      "path": "backend\\api\\server.py",
       "accessCount": 5,
-      "lastAccessed": 1775537331342,
+      "lastAccessed": 1775620482813,
+      "type": "file"
+    },
+    {
+      "path": "backend\\data_pipeline\\news_feed.py",
+      "accessCount": 4,
+      "lastAccessed": 1775620500973,
       "type": "file"
     },
     {
@@ -345,12 +357,6 @@
       "path": "backend\\agents\\options_chain_agent.py",
       "accessCount": 2,
       "lastAccessed": 1775536472396,
-      "type": "file"
-    },
-    {
-      "path": "backend\\api\\server.py",
-      "accessCount": 2,
-      "lastAccessed": 1775537164327,
       "type": "file"
     },
     {
@@ -447,12 +453,6 @@
       "path": "artifacts\\mobile\\app\\(tabs)\\news.tsx",
       "accessCount": 1,
       "lastAccessed": 1775532197355,
-      "type": "file"
-    },
-    {
-      "path": "backend\\data_pipeline\\news_feed.py",
-      "accessCount": 1,
-      "lastAccessed": 1775532240026,
       "type": "file"
     }
   ],

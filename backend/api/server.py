@@ -44,7 +44,9 @@ def create_app(
     _app_state["executor"] = executor
     _app_state["position_tracker"] = position_tracker
     _app_state["publisher"] = redis_publisher
+    _app_state["redis_publisher"] = redis_publisher
     _app_state["config"] = config
+    _app_state["news_cache"] = []  # In-memory news cache (fallback when DB unavailable)
 
     from api.routes import router
     app.include_router(router, prefix="/api")

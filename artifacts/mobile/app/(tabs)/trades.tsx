@@ -8,6 +8,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Animated,
+  Alert,
 } from "react-native";
 import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -53,10 +54,12 @@ export default function TradesScreen() {
   const { subscribe } = useWebSocket();
   const queryClient = useQueryClient();
 
-  const { data, isLoading, refetch, isRefetching } = useQuery({
+  const { data, isLoading, refetch, isRefetching, isError } = useQuery({
     queryKey: ["trades", filter],
     queryFn: () => api.getTrades(100, 0, filter === "all" ? undefined : filter),
-    retry: false,
+    retry: 2,
+    refetchInterval: 30_000,
+    staleTime: 10_000,
   });
 
   useEffect(() => {
@@ -119,6 +122,12 @@ export default function TradesScreen() {
           ListEmptyComponent={
             isLoading ? (
               <ActivityIndicator color={C.accentBright} style={{ marginTop: 60 }} />
+            ) : isError ? (
+              <EmptyState
+                icon="alert-triangle"
+                title="Failed to load trades"
+                subtitle="Pull down to retry. Check your connection."
+              />
             ) : (
               <EmptyState
                 icon="inbox"
@@ -148,7 +157,7 @@ function TradeRow({
   const rowY = useRef(new Animated.Value(16)).current;
   const dirVariant = trade.direction === "BULLISH" || trade.direction === "BUY" ? "bullish" : "bearish";
   const isOpen = trade.status === "OPEN";
-  const displayPnl = isOpen ? (trade as any).unrealized_pnl : trade.pnl;
+  const displayPnl = isOpen ? trade.unrealized_pnl : trade.pnl;
   const isProfitable = (displayPnl ?? 0) > 0;
   const isClosed = trade.status === "CLOSED";
 
@@ -233,6 +242,7 @@ function TradeExpanded({ tradeId, trade }: { tradeId: string; trade: Trade }) {
       queryClient.invalidateQueries({ queryKey: ["trades"] });
     } catch (e: any) {
       setClosing(false);
+      Alert.alert("Close failed", e.message || "Could not close position. Try again.");
     }
   };
 
@@ -254,8 +264,8 @@ function TradeExpanded({ tradeId, trade }: { tradeId: string; trade: Trade }) {
         <PriceItem label="SL" value={trade.sl_price} color={C.red} />
         <PriceItem label="Target" value={trade.target_price} color={C.green} />
         {trade.exit_price != null && <PriceItem label="Exit" value={trade.exit_price} />}
-        {isOpen && (trade as any).current_price != null && (
-          <PriceItem label="Current" value={(trade as any).current_price} color={C.accentBright} />
+        {isOpen && trade.current_price != null && (
+          <PriceItem label="Current" value={trade.current_price} color={C.accentBright} />
         )}
       </View>
       {trade.consensus_score != null && (

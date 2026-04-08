@@ -149,10 +149,19 @@ async def close_trade(trade_id: str):
     if trade_id not in open_positions:
         raise HTTPException(status_code=404, detail="Open position not found")
 
-    await executor._execute_exit({
-        "trade_id": trade_id,
-        "exit_reason": "MANUAL_CLOSE",
-    })
+    publisher = state.get("redis_publisher")
+    if publisher:
+        await publisher.publish_trade_execution({
+            "event": "EXIT_ORDER",
+            "trade_id": trade_id,
+            "exit_reason": "MANUAL_CLOSE",
+        })
+    else:
+        # Fallback: direct call if publisher unavailable
+        await executor._execute_exit({
+            "trade_id": trade_id,
+            "exit_reason": "MANUAL_CLOSE",
+        })
 
     return {"status": "closed", "trade_id": trade_id}
 
@@ -305,43 +314,49 @@ async def get_signals(
 
 @router.get("/news")
 async def get_news(limit: int = Query(20, ge=1, le=100)):
+    # Try DB first
     conn = _db_conn()
-    if not conn:
-        return {"news": []}
+    if conn:
+        try:
+            import json as _json
+            cur = conn.cursor()
+            cur.execute(
+                """SELECT id, event_type, source, message, details, timestamp
+                   FROM audit_logs
+                   WHERE event_type IN ('NEWS_CLASSIFIED', 'NEWS_SIGNAL', 'NEWS_ANALYSIS')
+                   ORDER BY timestamp DESC LIMIT %s""",
+                (limit,),
+            )
+            columns = [desc[0] for desc in cur.description]
+            rows = cur.fetchall()
 
-    try:
-        import json
-        cur = conn.cursor()
-        cur.execute(
-            """SELECT id, event_type, source, message, details, timestamp
-               FROM audit_logs
-               WHERE event_type IN ('NEWS_CLASSIFIED', 'NEWS_SIGNAL', 'NEWS_ANALYSIS')
-               ORDER BY timestamp DESC LIMIT %s""",
-            (limit,),
-        )
-        columns = [desc[0] for desc in cur.description]
-        rows = cur.fetchall()
+            news = []
+            for row in rows:
+                item = dict(zip(columns, row))
+                for k, v in item.items():
+                    if isinstance(v, datetime):
+                        item[k] = v.isoformat()
+                if isinstance(item.get("details"), str):
+                    try:
+                        item["details"] = _json.loads(item["details"])
+                    except (_json.JSONDecodeError, TypeError):
+                        item["details"] = {}
+                news.append(item)
 
-        news = []
-        for row in rows:
-            item = dict(zip(columns, row))
-            for k, v in item.items():
-                if isinstance(v, datetime):
-                    item[k] = v.isoformat()
-            # Parse details JSON string into dict for frontend
-            if isinstance(item.get("details"), str):
-                try:
-                    item["details"] = json.loads(item["details"])
-                except (json.JSONDecodeError, TypeError):
-                    item["details"] = {}
-            news.append(item)
+            conn.close()
+            if news:
+                return {"news": news}
+        except Exception as e:
+            logger.error(f"Failed to fetch news from DB: {e}")
+            try:
+                conn.close()
+            except Exception:
+                pass
 
-        return {"news": news}
-    except Exception as e:
-        logger.error(f"Failed to fetch news: {e}")
-        return {"news": []}
-    finally:
-        conn.close()
+    # Fallback: in-memory news cache
+    state = get_app_state()
+    cache = state.get("news_cache", [])
+    return {"news": cache[:limit]}
 
 
 @router.get("/settings")

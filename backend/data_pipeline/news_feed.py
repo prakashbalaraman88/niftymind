@@ -113,6 +113,18 @@ class NewsFeed:
             await self.publisher.publish_news(news_payload)
             logger.info(f"Published {len(new_articles)} new articles")
 
+            # Cache articles in-memory for API fallback when DB is unavailable
+            try:
+                from api.server import get_app_state
+                cache = get_app_state().get("news_cache", [])
+                for a in new_articles:
+                    cache.insert(0, a)
+                # Keep only latest 100
+                if len(cache) > 100:
+                    del cache[100:]
+            except Exception:
+                pass
+
             # Persist articles to audit_logs so the /api/news endpoint can serve them
             self._persist_news_to_db(new_articles)
 

@@ -45,8 +45,10 @@ export interface Trade {
   target_price: number;
   exit_price: number | null;
   quantity: number;
-  status: string;
+  status: "OPEN" | "CLOSED" | "CANCELLED" | string;
   pnl: number | null;
+  current_price?: number;
+  unrealized_pnl?: number;
   exit_reason: string | null;
   consensus_score: number | null;
   trade_type: string;

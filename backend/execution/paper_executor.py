@@ -29,8 +29,45 @@ class PaperExecutor:
         self._trailing_mgr = TrailingStopManager(capital=100000)
         self._trade_positions: dict[str, TradePosition] = {}  # trade_id -> TradePosition
 
+    def _recover_open_positions(self):
+        """Recover OPEN positions from DB on startup so trades survive restarts."""
+        try:
+            from agents.db_logger import _get_conn, replay_wal
+            # First replay any WAL entries from previous crash
+            replay_wal()
+            conn = _get_conn()
+            if not conn:
+                logger.warning("Cannot recover positions — DB unavailable")
+                return
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT trade_id, symbol, underlying, direction, quantity, entry_price, "
+                "trade_type, consensus_score, entry_time FROM trades WHERE status = 'OPEN'"
+            )
+            rows = cur.fetchall()
+            conn.close()
+            for row in rows:
+                trade_id, symbol, underlying, direction, qty, entry_price, trade_type, score, entry_time = row
+                self._positions[trade_id] = {
+                    "trade_id": trade_id,
+                    "symbol": symbol,
+                    "underlying": underlying,
+                    "direction": direction,
+                    "quantity": qty,
+                    "entry_price": float(entry_price) if entry_price else 0,
+                    "trade_type": trade_type or "INTRADAY",
+                    "entry_time": str(entry_time) if entry_time else datetime.now(IST).isoformat(),
+                    "status": "OPEN",
+                }
+                logger.info(f"Recovered position: {trade_id} {direction} {underlying} x{qty} @ {entry_price}")
+            if rows:
+                logger.info(f"Recovered {len(rows)} open positions from DB")
+        except Exception as e:
+            logger.error(f"Position recovery failed: {e}")
+
     async def start(self, shutdown_event: asyncio.Event):
         logger.info("Paper Executor starting")
+        self._recover_open_positions()
         pubsub = await self.publisher.subscribe("trade_executions", "ticks")
 
         try:
@@ -222,6 +259,9 @@ class PaperExecutor:
             pnl = (entry_price - exit_price) * quantity
         pnl = round(pnl, 2)
 
+        trade_type = position.get("trade_type", "INTRADAY")
+        symbol = position.get("symbol", f"{underlying} OPT")
+
         self._daily_pnl += pnl
         self._total_trades += 1
         if pnl > 0:
@@ -232,11 +272,11 @@ class PaperExecutor:
 
         upsert_trade(
             trade_id=trade_id,
-            symbol=f"{underlying} OPT",
+            symbol=symbol,
             underlying=underlying,
             direction=direction,
             quantity=quantity,
-            trade_type=position.get("trade_type", "INTRADAY"),
+            trade_type=trade_type,
             consensus_score=0,
             entry_price=entry_price,
             exit_price=exit_price,
