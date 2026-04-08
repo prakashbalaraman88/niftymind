@@ -13,6 +13,13 @@ logger = logging.getLogger("niftymind.db_logger")
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# DB constraint: direction must be LONG/SHORT, but agents use BULLISH/BEARISH
+_DIRECTION_MAP = {"BULLISH": "LONG", "BEARISH": "SHORT", "BUY": "LONG", "SELL": "SHORT"}
+
+
+def _normalize_direction(direction: str) -> str:
+    return _DIRECTION_MAP.get(direction.upper(), direction) if direction else direction
+
 # Write-Ahead Log: trades that failed DB persistence are saved here
 _WAL_DIR = Path(os.path.dirname(__file__)).parent / "data" / "wal"
 _WAL_DIR.mkdir(parents=True, exist_ok=True)
@@ -171,6 +178,7 @@ def insert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
                  sl_price: float | None = None,
                  target_price: float | None = None,
                  status: str = "PROPOSED"):
+    direction = _normalize_direction(direction)
     sql = """INSERT INTO trades (trade_id, symbol, underlying, direction,
                entry_price, sl_price, target_price, quantity, status,
                consensus_score, trade_type, created_at, updated_at)
@@ -200,6 +208,7 @@ def upsert_trade(trade_id: str, symbol: str, underlying: str, direction: str,
                  entry_time: str | None = None,
                  exit_time: str | None = None,
                  status: str = "PROPOSED"):
+    direction = _normalize_direction(direction)
     sql = """INSERT INTO trades (trade_id, symbol, underlying, direction,
                entry_price, sl_price, target_price, exit_price, quantity, status,
                pnl, exit_reason, consensus_score, trade_type,

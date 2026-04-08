@@ -1,7 +1,7 @@
 {
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"sleep 5 && cd \\\"D:\\\\Claude Projects\\\\niftymind-main\\\\artifacts\\\\mobile\\\" && eas build --platform android --profile preview --non-interactive 2>&1\",\"timeout\":600000,\"description\":\"Retry EAS...",
-  "error": "Exit code 1\nResolved \"preview\" environment for the build. Learn more: https://docs.expo.dev/eas/environment-variables/#setting-the-environment-for-your-builds\nNo environment variables with visibility \"Plain text\" and \"Sensitive\" found for the \"preview\" environment on EAS.\nEnvironment variables loaded from the \"preview\" build profile \"env\" configuration: EXPO_PUBLIC_DOMAIN, EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY.\n\n\n\n✔ Using remote Android credentials (Expo server)\n✔ Using Keystor...",
-  "timestamp": "2026-04-07T14:49:45.387Z",
+  "tool_name": "mcp__Claude_in_Chrome__find",
+  "tool_input_preview": "{\"query\":\"Supabase dashboard tab\",\"tabId\":414891243}",
+  "error": "Failed to find element: This page cannot be scripted due to an ExtensionsSettings policy.",
+  "timestamp": "2026-04-08T04:05:24.103Z",
   "retry_count": 1
 }

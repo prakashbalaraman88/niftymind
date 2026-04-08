@@ -1,7 +1,7 @@
 {
   "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"cd \\\"D:\\\\Claude Projects\\\\niftymind-main\\\\artifacts\\\\mobile\\\" && npx eas init --non-interactive 2>&1\",\"timeout\":30000,\"description\":\"Initialize EAS project\"}",
-  "error": "Exit code 1\nProject does not exist: @prakashb1988/mobile. Use --force flag to create this project.\n    Error: project:init command failed.",
-  "timestamp": "2026-04-07T13:12:36.461Z",
+  "tool_input_preview": "{\"command\":\"\\\"C:\\\\Users\\\\Prakash Other\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe\\\" -c \\\"\\nimport psycopg2, os\\nfrom dotenv import load_dotenv\\nload_dotenv('D:/Claude Projects/niftymind-...",
+  "error": "Exit code 1\nTraceback (most recent call last):\r\n  File \"<string>\", line 6, in <module>\r\n  File \"C:\\Users\\Prakash Other\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\psycopg2\\__init__.py\", line 122, in connect\r\n    conn = _connect(dsn, connection_factory=connection_factory, **kwasync)\r\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\r\npsycopg2.OperationalError: connection to server at \"aws-1-ap-south-1.pooler.supabase.com\" (3.109.171.244), port 5432 failed: F...",
+  "timestamp": "2026-04-08T04:15:14.140Z",
   "retry_count": 1
 }
