@@ -111,6 +111,10 @@ class PaperExecutor:
         "BANKNIFTY": "BANKNIFTY", "BANKNIFTY-FUT": "BANKNIFTY",
     }
 
+    @staticmethod
+    def _is_long(direction: str) -> bool:
+        return direction.upper() in ("BULLISH", "LONG", "BUY")
+
     def _update_price(self, tick: dict):
         symbol = tick.get("symbol", "")
         price = tick.get("ltp") or tick.get("last_price") or tick.get("close")
@@ -149,7 +153,7 @@ class PaperExecutor:
             fill_price = 22000 if underlying == "NIFTY" else 48000
 
         slippage = fill_price * 0.0005
-        if direction == "BULLISH":
+        if self._is_long(direction):
             fill_price += slippage
         else:
             fill_price -= slippage
@@ -172,7 +176,7 @@ class PaperExecutor:
         # Create a TradePosition for trailing stop management
         sl_points = float(data.get("sl_points", data.get("supporting_data", {}).get("sl_points", 20)))
         atr = float(data.get("atr", data.get("supporting_data", {}).get("atr", 0)))
-        if direction == "BULLISH":
+        if self._is_long(direction):
             sl_price = fill_price - sl_points
         else:
             sl_price = fill_price + sl_points
@@ -252,14 +256,14 @@ class PaperExecutor:
         exit_price = self._latest_prices.get(underlying, entry_price)
 
         slippage = exit_price * 0.0005
-        if direction == "BULLISH":
+        if self._is_long(direction):
             exit_price -= slippage
         else:
             exit_price += slippage
 
         exit_price = round(exit_price, 2)
 
-        if direction == "BULLISH":
+        if self._is_long(direction):
             pnl = (exit_price - entry_price) * quantity
         else:
             pnl = (entry_price - exit_price) * quantity
@@ -389,13 +393,13 @@ class PaperExecutor:
         # Simulate exit price with slippage
         exit_price = current_price
         slippage = exit_price * 0.0005
-        if direction == "BULLISH":
+        if self._is_long(direction):
             exit_price -= slippage
         else:
             exit_price += slippage
         exit_price = round(exit_price, 2)
 
-        if direction == "BULLISH":
+        if self._is_long(direction):
             pnl = (exit_price - entry_price) * exit_qty
         else:
             pnl = (entry_price - exit_price) * exit_qty
@@ -486,7 +490,7 @@ class PaperExecutor:
         for pos in self._positions.values():
             underlying = pos["underlying"]
             current_price = self._latest_prices.get(underlying, pos["entry_price"])
-            if pos["direction"] == "BULLISH":
+            if self._is_long(pos["direction"]):
                 pos["unrealized_pnl"] = round((current_price - pos["entry_price"]) * pos["quantity"], 2)
             else:
                 pos["unrealized_pnl"] = round((pos["entry_price"] - current_price) * pos["quantity"], 2)

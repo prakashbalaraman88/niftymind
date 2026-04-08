@@ -156,6 +156,12 @@
   },
   "hotPaths": [
     {
+      "path": "backend\\execution\\paper_executor.py",
+      "accessCount": 27,
+      "lastAccessed": 1775628149601,
+      "type": "file"
+    },
+    {
       "path": "backend\\main.py",
       "accessCount": 26,
       "lastAccessed": 1775619902974,
@@ -165,12 +171,6 @@
       "path": "backend\\data_pipeline\\truedata_feed.py",
       "accessCount": 23,
       "lastAccessed": 1775538684361,
-      "type": "file"
-    },
-    {
-      "path": "backend\\execution\\paper_executor.py",
-      "accessCount": 19,
-      "lastAccessed": 1775626160816,
       "type": "file"
     },
     {
