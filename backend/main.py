@@ -149,7 +149,6 @@ async def main():
         )
         tasks.append(asyncio.create_task(retrainer.start(shutdown_event)))
         logger.info("Started learning: Daily Retrainer (16:00 IST)")
-        logger.info(f"Learning gate status: {gate_status}")
 
     consensus = ConsensusOrchestrator(
         publisher,
