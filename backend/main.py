@@ -180,7 +180,6 @@ async def main():
     logger.info("Started WebSocket Redis relay")
 
     import uvicorn
-    import os
     port = int(os.environ.get("PORT", 8000))
     uvicorn_config = uvicorn.Config(
         fastapi_app,
