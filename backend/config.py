@@ -76,9 +76,18 @@ class ZerodhaConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
-    api_key: str = field(default_factory=lambda: _require_env("GEMINI_API_KEY"))
+    """OpenRouter (OpenAI-compatible API). Default model is the free Gemma tier.
+
+    api_key intentionally NOT hard-required: a missing key degrades the LLM
+    agents to NEUTRAL fallbacks instead of crash-looping the whole engine
+    (data feeds, execution and the mobile API keep running).
+    """
+    api_key: str = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
     model: str = field(
-        default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        default_factory=lambda: os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
+    )
+    base_url: str = field(
+        default_factory=lambda: os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
     )
 
 

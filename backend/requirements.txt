@@ -17,8 +17,7 @@ redis==5.2.1
 httpx==0.28.1
 aiohttp==3.9.3
 
-# AI / LLM
-google-genai>=1.0.0
+# AI / LLM — OpenRouter (OpenAI-compatible REST via httpx, no SDK needed)
 langgraph==0.2.60
 
 # Data & ML
