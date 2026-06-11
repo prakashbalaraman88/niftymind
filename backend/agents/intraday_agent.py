@@ -136,7 +136,7 @@ Context:
 Based on these signals, should we take an intraday options trade? Respond with JSON."""
 
         try:
-            result = await query_claude(SYSTEM_PROMPT, user_msg, self.llm_config)
+            result = await query_claude(SYSTEM_PROMPT, user_msg, self.llm_config, tier="decision")
         except Exception as e:
             self.logger.error(f"Claude API error in intraday decision: {e}")
             return None

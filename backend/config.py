@@ -32,6 +32,11 @@ def _env_bool(key: str, default: bool) -> bool:
     return default
 
 
+def _env_list(key: str, default: str) -> tuple:
+    raw = os.getenv(key, default)
+    return tuple(m.strip() for m in raw.split(",") if m.strip())
+
+
 @dataclass(frozen=True)
 class FyersConfig:
     app_id: str = field(default_factory=lambda: os.getenv("FYERS_APP_ID", ""))
@@ -76,7 +81,18 @@ class ZerodhaConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
-    """OpenRouter (OpenAI-compatible API). Default model is the free Gemma tier.
+    """OpenRouter (OpenAI-compatible API). Paid by default (no :free).
+
+    Two model tiers + a failover chain, all env-overridable:
+      - model           : analysis agents (fast/cheap) — default Gemini 2.5 Flash-Lite,
+                          chosen by scripts/llm_model_bench.py (fastest at equal
+                          reliability/sanity; ~2s vs ~3.3s for Gemma at the same price)
+      - model_decision  : decision agents (intraday/BTST synthesis); blank = use `model`.
+                          Worth A/B-ing deepseek/deepseek-v3.2 (better confidence
+                          calibration on choppy setups, but slower) on real P&L.
+      - fallback_models : tried in order on 429/5xx/parse-failure — paid Gemma then
+                          free Gemma, so a Flash-Lite outage degrades gracefully and
+                          the engine never hard-stops.
 
     api_key intentionally NOT hard-required: a missing key degrades the LLM
     agents to NEUTRAL fallbacks instead of crash-looping the whole engine
@@ -84,7 +100,15 @@ class LLMConfig:
     """
     api_key: str = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
     model: str = field(
-        default_factory=lambda: os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
+        default_factory=lambda: os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash-lite")
+    )
+    model_decision: str = field(
+        default_factory=lambda: os.getenv("OPENROUTER_MODEL_DECISION", "")
+    )
+    fallback_models: tuple = field(
+        default_factory=lambda: _env_list(
+            "OPENROUTER_FALLBACK_MODELS", "google/gemma-4-31b-it,google/gemma-4-31b-it:free"
+        )
     )
     base_url: str = field(
         default_factory=lambda: os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")

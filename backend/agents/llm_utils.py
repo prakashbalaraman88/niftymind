@@ -11,12 +11,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 logger = logging.getLogger("niftymind.llm_utils")
 
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = "google/gemma-4-31b-it:free"
+DEFAULT_MODEL = "google/gemini-2.5-flash-lite"
+DEFAULT_FALLBACKS = ("google/gemma-4-31b-it", "google/gemma-4-31b-it:free")
 
 # Agents treat this as "no opinion" — keeps the pipeline flowing on LLM failure
 _NEUTRAL_FALLBACK = {"direction": "NEUTRAL", "confidence": 0.3}
 
-_MAX_ATTEMPTS = 3
+_MAX_ATTEMPTS = 2          # per-model transient retries before moving down the chain
 _TIMEOUT_SECONDS = 45.0
 
 
@@ -45,25 +46,38 @@ def _extract_json(raw_text: str) -> dict | None:
         return None
 
 
-async def query_llm(
+def _resolve_models(llm_config, tier: str) -> list[str]:
+    """Ordered model chain for this call: primary (by tier) then fallbacks, deduped.
+
+    tier="decision" prefers model_decision (stronger reasoner) when configured;
+    everything else uses the default/analysis model. The fallback chain (ending
+    in the free tier) is appended so a single provider hiccup never hard-stops
+    the engine.
+    """
+    primary = ""
+    if tier == "decision":
+        primary = getattr(llm_config, "model_decision", "") or ""
+    if not primary:
+        primary = getattr(llm_config, "model", "") or os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)
+
+    fallbacks = list(getattr(llm_config, "fallback_models", None) or DEFAULT_FALLBACKS)
+
+    chain: list[str] = []
+    for m in [primary, *fallbacks]:
+        if m and m not in chain:
+            chain.append(m)
+    return chain
+
+
+async def _call_model(
+    client: httpx.AsyncClient,
+    base_url: str,
+    api_key: str,
+    model: str,
     system_prompt: str,
     user_message: str,
-    llm_config=None,
-) -> dict:
-    """Query the LLM via OpenRouter (OpenAI-compatible chat completions).
-
-    Returns the parsed JSON object from the model's reply. On any failure
-    (missing key, rate limit exhausted, malformed reply) returns a NEUTRAL
-    low-confidence dict so agents degrade gracefully instead of erroring.
-    """
-    api_key = (getattr(llm_config, "api_key", "") or os.getenv("OPENROUTER_API_KEY", ""))
-    model = (getattr(llm_config, "model", "") or os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL))
-    base_url = (getattr(llm_config, "base_url", "") or os.getenv("OPENROUTER_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
-
-    if not api_key:
-        logger.error("OPENROUTER_API_KEY not set — returning NEUTRAL fallback")
-        return {**_NEUTRAL_FALLBACK, "raw_response": "missing OPENROUTER_API_KEY"}
-
+) -> dict | None:
+    """One model, with transient (429/5xx) retries. Returns parsed dict or None."""
     payload = {
         "model": model,
         "messages": [
@@ -81,49 +95,79 @@ async def query_llm(
         "X-Title": "NiftyMind",
     }
 
-    last_error: Exception | None = None
     for attempt in range(_MAX_ATTEMPTS):
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
-                resp = await client.post(
-                    f"{base_url}/chat/completions", json=payload, headers=headers
-                )
+            resp = await client.post(
+                f"{base_url}/chat/completions", json=payload, headers=headers
+            )
 
             if resp.status_code == 429:
-                # Free-tier rate limit (~20 req/min) — back off and retry
-                wait = 3.0 * (attempt + 1)
-                logger.warning(f"OpenRouter rate-limited (429), retrying in {wait:.0f}s")
+                wait = 2.0 * (attempt + 1)
+                logger.warning(f"{model} rate-limited (429), retry in {wait:.0f}s")
                 await asyncio.sleep(wait)
+                continue
+
+            if resp.status_code >= 500:
+                logger.warning(f"{model} upstream {resp.status_code}, retrying")
+                await asyncio.sleep(1.0 * (attempt + 1))
                 continue
 
             resp.raise_for_status()
             data = resp.json()
             message = (data.get("choices") or [{}])[0].get("message", {})
-            # Some free-tier providers put text in `reasoning` with empty `content`
+            # Some providers put text in `reasoning` with empty `content`
             raw_text = message.get("content") or message.get("reasoning") or ""
 
             parsed = _extract_json(raw_text)
             if parsed is not None:
                 return parsed
 
-            # Malformed/empty reply — treat like a soft failure and retry
-            logger.warning(
-                f"Could not parse JSON from LLM response "
-                f"(attempt {attempt + 1}/{_MAX_ATTEMPTS}): {raw_text[:120]!r}"
-            )
-            last_error = ValueError("unparseable LLM response")
-            if attempt < _MAX_ATTEMPTS - 1:
-                await asyncio.sleep(1.5 * (attempt + 1))
-                continue
-            return {"raw_response": raw_text, **_NEUTRAL_FALLBACK}
+            logger.warning(f"{model} returned unparseable JSON: {raw_text[:100]!r}")
+            return None  # parse failure → let the chain try the next model
 
         except Exception as e:
-            last_error = e
-            if attempt < _MAX_ATTEMPTS - 1:
-                await asyncio.sleep(1.5 * (attempt + 1))
+            logger.warning(f"{model} request error (attempt {attempt + 1}): {e}")
+            await asyncio.sleep(1.0 * (attempt + 1))
 
-    logger.error(f"OpenRouter query failed after {_MAX_ATTEMPTS} attempts: {last_error}")
-    return {**_NEUTRAL_FALLBACK, "raw_response": f"LLM error: {last_error}"}
+    return None
+
+
+async def query_llm(
+    system_prompt: str,
+    user_message: str,
+    llm_config=None,
+    tier: str = "analysis",
+) -> dict:
+    """Query the LLM via OpenRouter (OpenAI-compatible chat completions) with failover.
+
+    Tries each model in the resolved chain (tier-primary → fallbacks → free tier)
+    until one returns parseable JSON. Returns a NEUTRAL low-confidence dict only
+    if the whole chain is exhausted, so agents degrade gracefully instead of
+    erroring. `tier="decision"` routes intraday/BTST synthesis to the stronger
+    reasoner when one is configured.
+    """
+    api_key = getattr(llm_config, "api_key", "") or os.getenv("OPENROUTER_API_KEY", "")
+    base_url = (
+        getattr(llm_config, "base_url", "") or os.getenv("OPENROUTER_BASE_URL", DEFAULT_BASE_URL)
+    ).rstrip("/")
+
+    if not api_key:
+        logger.error("OPENROUTER_API_KEY not set — returning NEUTRAL fallback")
+        return {**_NEUTRAL_FALLBACK, "raw_response": "missing OPENROUTER_API_KEY"}
+
+    models = _resolve_models(llm_config, tier)
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
+        for idx, model in enumerate(models):
+            result = await _call_model(client, base_url, api_key, model, system_prompt, user_message)
+            if result is not None:
+                if idx > 0:
+                    logger.info(f"LLM failover: '{model}' succeeded (fallback #{idx})")
+                return result
+            logger.warning(f"LLM model '{model}' exhausted, trying next in chain")
+
+    logger.error(f"All LLM models failed for tier={tier}: {models}")
+    return {**_NEUTRAL_FALLBACK, "raw_response": "all LLM providers failed"}
 
 
 # Backward-compatible alias

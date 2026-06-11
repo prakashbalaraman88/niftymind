@@ -154,13 +154,13 @@ Key EOD Data:
 - Gap Prediction: {macro_data.get('gap_prediction', 'N/A')}
 - DXY: {macro_data.get('dxy_price', 'N/A')} ({macro_data.get('dxy_change_pct', 'N/A')}%)
 
-{f'WARNING: Tomorrow is expiry day (Thursday). Weekly options expire tomorrow — prefer monthly expiry.' if day_of_week == 'Wednesday' else ''}
+{f'WARNING: Tomorrow is expiry day (Tuesday). Weekly options expire tomorrow — prefer monthly expiry.' if day_of_week == 'Monday' else ''}
 {f'NOTE: Today is expiry day. Next-day options have weekend theta advantage for monthly expiry.' if self.is_expiry_day() else ''}
 
 Should we take a BTST position? Respond with JSON."""
 
         try:
-            result = await query_claude(SYSTEM_PROMPT, user_msg, self.llm_config)
+            result = await query_claude(SYSTEM_PROMPT, user_msg, self.llm_config, tier="decision")
         except Exception as e:
             self.logger.error(f"Claude API error in BTST decision: {e}")
             return None
