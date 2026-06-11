@@ -7,6 +7,8 @@ import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from psycopg2 import pool as pg_pool
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 logger = logging.getLogger("niftymind.db_logger")
@@ -29,14 +31,18 @@ def _normalize_status(status: str) -> str:
     return _STATUS_MAP.get(status.upper(), status) if status else status
 
 
-def _normalize_risk_approval(value) -> bool | None:
-    """Convert risk_approval to boolean for DB."""
+def _normalize_risk_approval(value) -> str | None:
+    """Normalize risk_approval to text for DB (schema declares text)."""
     if value is None:
         return None
     if isinstance(value, bool):
-        return value
+        return "APPROVED" if value else "VETOED"
     s = str(value).upper()
-    return s in ("APPROVED", "TRUE", "YES", "1")
+    if s in ("TRUE", "YES", "1", "APPROVED"):
+        return "APPROVED"
+    if s in ("FALSE", "NO", "0", "VETOED"):
+        return "VETOED"
+    return s  # pass through "APPROVED", "VETOED", etc. as-is
 
 # Write-Ahead Log: trades that failed DB persistence are saved here
 _WAL_DIR = Path(os.path.dirname(__file__)).parent / "data" / "wal"
@@ -49,25 +55,61 @@ _RETRY_DELAY = 2  # seconds between retries
 _db_fail_count = 0
 _db_fail_lock = threading.Lock()
 
+_pool: pg_pool.ThreadedConnectionPool | None = None
+_pool_lock = threading.Lock()
+
 
 def get_db_fail_count() -> int:
     return _db_fail_count
 
 
+def _get_pool() -> pg_pool.ThreadedConnectionPool | None:
+    global _pool
+    if _pool is not None:
+        return _pool
+    with _pool_lock:
+        if _pool is not None:
+            return _pool
+        url = os.getenv("DATABASE_URL", "")
+        if not url:
+            return None
+        try:
+            _pool = pg_pool.ThreadedConnectionPool(
+                minconn=1,
+                maxconn=10,
+                dsn=url,
+                connect_timeout=10,
+            )
+            logger.info("DB connection pool initialized (1-10 connections)")
+            return _pool
+        except Exception as e:
+            logger.error(f"Failed to initialize DB pool: {e}")
+            return None
+
+
 def _get_conn():
-    import psycopg2
-    url = os.getenv("DATABASE_URL", "")
-    if not url:
-        logger.warning("DATABASE_URL not set, DB logging disabled")
+    p = _get_pool()
+    if p is None:
+        logger.warning("DATABASE_URL not set or pool unavailable, DB logging disabled")
         return None
     try:
-        return psycopg2.connect(url, connect_timeout=10)
+        return p.getconn()
     except Exception as e:
         global _db_fail_count
         with _db_fail_lock:
             _db_fail_count += 1
-        logger.error(f"DB connection failed (total failures: {_db_fail_count}): {e}")
+        logger.error(f"DB connection from pool failed (total failures: {_db_fail_count}): {e}")
         return None
+
+
+def _put_conn(conn):
+    """Return connection to pool."""
+    p = _get_pool()
+    if p and conn:
+        try:
+            p.putconn(conn)
+        except Exception:
+            pass
 
 
 def _execute_with_retry(func_name: str, sql: str, params: tuple, max_retries: int = _MAX_RETRIES) -> bool:
@@ -95,10 +137,7 @@ def _execute_with_retry(func_name: str, sql: str, params: tuple, max_retries: in
             if attempt < max_retries:
                 time.sleep(_RETRY_DELAY)
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            _put_conn(conn)
     return False
 
 

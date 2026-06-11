@@ -1,5 +1,18 @@
-import React, { useEffect, useRef } from "react";
-import { View, Animated, StyleSheet, type ViewStyle } from "react-native";
+import React, { useEffect, useState } from "react";
+import {
+  View,
+  StyleSheet,
+  type ViewStyle,
+  type LayoutChangeEvent,
+} from "react-native";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withRepeat,
+  withTiming,
+  Easing,
+} from "react-native-reanimated";
+import { LinearGradient } from "expo-linear-gradient";
 import colors from "@/constants/colors";
 
 const C = colors.dark;
@@ -12,36 +25,59 @@ interface Props {
 }
 
 export function SkeletonLoader({ width = "100%", height = 16, borderRadius = 8, style }: Props) {
-  const shimmer = useRef(new Animated.Value(0)).current;
+  const [containerWidth, setContainerWidth] = useState(200);
+  const translateX = useSharedValue(-containerWidth * 1.5);
 
   useEffect(() => {
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(shimmer, { toValue: 1, duration: 900, useNativeDriver: false }),
-        Animated.timing(shimmer, { toValue: 0, duration: 900, useNativeDriver: false }),
-      ])
+    translateX.value = -containerWidth * 1.5;
+    translateX.value = withRepeat(
+      withTiming(containerWidth * 1.5, {
+        duration: 1200,
+        easing: Easing.linear,
+      }),
+      -1,
+      false,
     );
-    animation.start();
-    return () => animation.stop();
-  }, [shimmer]);
+  }, [containerWidth]);
 
-  const backgroundColor = shimmer.interpolate({
-    inputRange: [0, 1],
-    outputRange: [C.shimmer1, C.shimmer2],
-  });
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.value }],
+  }));
+
+  const onLayout = (e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    if (w > 0) setContainerWidth(w);
+  };
 
   return (
-    <Animated.View
+    <View
+      onLayout={onLayout}
       style={[
         {
           width: width as ViewStyle["width"],
           height,
           borderRadius,
-          backgroundColor,
+          backgroundColor: C.shimmer1,
+          overflow: "hidden",
         },
         style,
       ]}
-    />
+    >
+      <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
+        <LinearGradient
+          colors={[
+            "transparent",
+            C.shimmer2,
+            C.shimmer3,
+            C.shimmer2,
+            "transparent",
+          ]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={{ width: containerWidth * 3, height: "100%" }}
+        />
+      </Animated.View>
+    </View>
   );
 }
 
@@ -50,14 +86,19 @@ export function CardSkeleton() {
     <View style={styles.card}>
       <SkeletonLoader width={100} height={12} borderRadius={6} />
       <View style={{ height: 14 }} />
-      <SkeletonLoader width="70%" height={22} borderRadius={8} />
+      <SkeletonLoader width="70%" height={28} borderRadius={8} />
       <View style={{ height: 10 }} />
       <SkeletonLoader width="50%" height={14} borderRadius={6} />
-      <View style={{ height: 14, borderTopWidth: 1, borderTopColor: C.separator, marginTop: 14 }} />
+      <View style={styles.divider} />
       <View style={styles.skeletonRow}>
         <SkeletonLoader width="30%" height={12} borderRadius={6} />
         <SkeletonLoader width="25%" height={12} borderRadius={6} />
         <SkeletonLoader width="28%" height={12} borderRadius={6} />
+      </View>
+      <View style={{ height: 10 }} />
+      <View style={styles.skeletonRow}>
+        <SkeletonLoader width="40%" height={10} borderRadius={6} />
+        <SkeletonLoader width="35%" height={10} borderRadius={6} />
       </View>
     </View>
   );
@@ -72,6 +113,11 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: C.cardBorder,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: C.separator,
+    marginVertical: 14,
   },
   skeletonRow: {
     flexDirection: "row",

@@ -73,7 +73,9 @@ class RiskManager(BaseAgent):
                 "status": "OPEN",
             })
 
-        elif event in ("EXIT", "SL_HIT", "TARGET_HIT", "EOD_CLOSE", "MANUAL"):
+        elif event in ("EXIT", "SL_HIT", "TARGET_HIT", "EOD_CLOSE", "MANUAL",
+                       "FULL_EXIT_SL", "FULL_EXIT_ILLIQUID", "TIME_EXIT", "EOD_EXIT",
+                       "MANUAL_CLOSE", "MANUAL_TEST", "BRACKET_EXIT") or event.startswith("PARTIAL_EXIT"):
             pnl = float(data.get("pnl", 0))
             self._daily_pnl += pnl
             self._drawdown_mgr.record_trade(pnl)
@@ -221,6 +223,7 @@ class RiskManager(BaseAgent):
             approved_data["supporting_data"]["risk_checks"] = checks
 
             await self.publisher.publish_trade_execution({
+                **approved_data,
                 "event": "RISK_APPROVED",
                 "trade_id": trade_id,
                 "trade_type": trade_type,

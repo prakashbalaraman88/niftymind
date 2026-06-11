@@ -66,7 +66,7 @@ async def main():
     from execution.kite_executor import KiteExecutor
     from execution.position_tracker import PositionTracker
 
-    from api.server import create_app
+    from api.server import create_app, get_app_state
     from api.websocket_handler import start_redis_relay
 
     publisher = RedisPublisher(config.redis)
@@ -157,6 +157,7 @@ async def main():
         accuracy_tracker=accuracy_tracker,
         pre_trade_recall=pre_trade_recall,
         outcome_model=outcome_model,
+        capital=config.risk.capital,
     )
     tasks.append(asyncio.create_task(consensus.start(shutdown_event)))
     logger.info(f"Started control agent: {consensus.agent_name}")
@@ -168,6 +169,7 @@ async def main():
     )
     tasks.append(asyncio.create_task(risk_mgr.start(shutdown_event)))
     logger.info(f"Started control agent: {risk_mgr.agent_name}")
+    get_app_state()["risk_manager"] = risk_mgr
 
     tasks.append(asyncio.create_task(executor.start(shutdown_event)))
     logger.info(f"Started executor: {config.trading.mode}")

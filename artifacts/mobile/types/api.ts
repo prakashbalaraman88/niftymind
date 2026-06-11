@@ -3,10 +3,14 @@ export interface DashboardData {
   trading_mode: string;
   executor: {
     mode: string;
-    total_trades?: number;
-    winning_trades?: number;
+    daily_pnl?: number;
     total_pnl?: number;
     today_pnl?: number;
+    total_trades?: number;
+    winning_trades?: number;
+    win_rate?: number;
+    open_positions?: number;
+    active_brackets?: number;
   };
   positions: {
     open: OpenPosition[];
@@ -83,7 +87,7 @@ export interface TradeLogEntry {
   pnl: number | null;
   agent_votes: Record<string, unknown> | null;
   consensus_score: number | null;
-  risk_approval: boolean | null;
+  risk_approval: string | null;
   risk_reasoning: string | null;
   details: Record<string, unknown> | null;
   timestamp: string;
@@ -151,4 +155,32 @@ export interface ZerodhaStatus {
   user_name?: string;
   broker?: string;
   message?: string;
+}
+
+export interface DailyPnlEntry {
+  trade_date: string;
+  total_trades: number;
+  winners: number;
+  losers: number;
+  daily_pnl: number;
+  best_trade: number;
+  worst_trade: number;
+  cumulative_pnl: number;
+}
+
+export interface PerformanceMetrics {
+  total_trades: number;
+  winners: number;
+  losers: number;
+  win_rate: number;
+  avg_win: number;
+  avg_loss: number;
+  avg_rr: number;
+  profit_factor: number;
+  net_pnl: number;
+  expectancy: number;
+  max_drawdown: number;
+  sharpe_ratio: number;
+  gross_profit: number;
+  gross_loss: number;
 }

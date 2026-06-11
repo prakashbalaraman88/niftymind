@@ -7,6 +7,9 @@ const colors = {
     card: "#1A1C24",
     cardBorder: "rgba(255,255,255,0.07)",
     glassBorder: "rgba(255,255,255,0.10)",
+    glass: "rgba(255,255,255,0.04)",
+    glassStrong: "rgba(255,255,255,0.08)",
+    glassBorderStrong: "rgba(255,255,255,0.14)",
 
     text: "#FFFFFF",
     textSecondary: "rgba(255,255,255,0.55)",
@@ -32,6 +35,10 @@ const colors = {
     goldGlow: "rgba(255,184,0,0.25)",
     goldDark: "rgba(255,184,0,0.12)",
 
+    success: "#10F0A0",
+    warning: "#FFB800",
+    danger: "#FF3B5C",
+
     border: "rgba(255,255,255,0.07)",
     separator: "rgba(255,255,255,0.05)",
     overlay: "rgba(0,0,0,0.75)",
@@ -47,6 +54,10 @@ const colors = {
       card: ["#1A1C24", "#13151C"] as [string, string],
       surface: ["rgba(26,28,36,0.9)", "rgba(13,15,20,0.95)"] as [string, string],
       gold: ["#FFB800", "#FF7C00"] as [string, string],
+      emerald: ["#10F0A0", "#059669"] as [string, string],
+      sunset: ["#FF3B5C", "#FF6B35"] as [string, string],
+      ocean: ["#2563EB", "#7C3AED"] as [string, string],
+      dark: ["#1A1C24", "#0F1014"] as [string, string],
     },
 
     shimmer1: "#1A1C24",

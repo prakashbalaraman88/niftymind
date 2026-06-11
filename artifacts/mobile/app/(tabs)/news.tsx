@@ -1,12 +1,12 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo } from "react";
 import {
   View,
   Text,
   StyleSheet,
   SectionList,
   RefreshControl,
-  Animated,
 } from "react-native";
+import Animated, { FadeInLeft } from "react-native-reanimated";
 import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,7 +16,6 @@ import { api } from "@/lib/api";
 import { useWebSocket } from "@/contexts/WebSocketContext";
 import { Card } from "@/components/Card";
 import { StatusBadge } from "@/components/StatusBadge";
-import { EmptyState } from "@/components/EmptyState";
 import { SkeletonLoader } from "@/components/SkeletonLoader";
 import type { NewsItem } from "@/types/api";
 
@@ -98,7 +97,20 @@ export default function NewsScreen() {
   if (sections.length === 0) {
     return (
       <View style={styles.container}>
-        <EmptyState icon="rss" title="No news yet" subtitle="Market news and economic events will appear here." />
+        <View style={styles.emptyContainer}>
+          <View style={styles.emptyIconWrap}>
+            <LinearGradient
+              colors={["rgba(124,58,237,0.2)", "rgba(37,99,235,0.1)"]}
+              style={styles.emptyIconGradient}
+            >
+              <Feather name="rss" size={36} color={C.accentBright} />
+            </LinearGradient>
+          </View>
+          <Text style={styles.emptyTitle}>No news yet</Text>
+          <Text style={styles.emptySubtitle}>
+            Market news and economic events will appear here as they arrive.
+          </Text>
+        </View>
       </View>
     );
   }
@@ -109,10 +121,18 @@ export default function NewsScreen() {
 
   const renderSectionHeader = ({ section }: { section: Section }) => (
     <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{section.title}</Text>
-      <View style={styles.sectionCountBadge}>
-        <Text style={styles.sectionCount}>{section.data.length}</Text>
+      <View style={styles.sectionTitleRow}>
+        <Text style={styles.sectionTitle}>{section.title}</Text>
+        <View style={styles.sectionCountBadge}>
+          <Text style={styles.sectionCount}>{section.data.length}</Text>
+        </View>
       </View>
+      <LinearGradient
+        colors={["rgba(124,58,237,0.5)", "transparent"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+        style={styles.sectionDivider}
+      />
     </View>
   );
 
@@ -133,16 +153,6 @@ export default function NewsScreen() {
 }
 
 function NewsCard({ item, index }: { item: NewsItem; index: number }) {
-  const opacity = useRef(new Animated.Value(0)).current;
-  const translateX = useRef(new Animated.Value(-12)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(opacity, { toValue: 1, duration: 350, delay: index * 40, useNativeDriver: true }),
-      Animated.spring(translateX, { toValue: 0, delay: index * 40, useNativeDriver: true, damping: 18 }),
-    ]).start();
-  }, []);
-
   const details = item.details || {};
   const impact = getImpact(item);
   const impactVariant: "high" | "medium" | "low" =
@@ -155,6 +165,9 @@ function NewsCard({ item, index }: { item: NewsItem; index: number }) {
   const eventTime = (details.event_time as string) || "";
   const isCal = isCalendarEvent(item);
 
+  const isHighImpact = impact === "high" || impact === "negative";
+  const isCalOrGold = isCal;
+
   const iconBgColors: [string, string] = isCal
     ? ["rgba(255,184,0,0.2)", "rgba(255,124,0,0.1)"]
     : ["rgba(124,58,237,0.2)", "rgba(37,99,235,0.1)"];
@@ -162,14 +175,37 @@ function NewsCard({ item, index }: { item: NewsItem; index: number }) {
   const iconColor = isCal ? C.gold : C.accentBright;
 
   const impactBorderColor =
-    impact === "high" || impact === "negative" ? "rgba(255,59,92,0.12)" :
+    isHighImpact ? "rgba(255,59,92,0.2)" :
+    isCal ? "rgba(255,184,0,0.2)" :
     impact === "medium" || impact === "mixed" ? "rgba(255,184,0,0.12)" :
     C.cardBorder;
 
+  const cardBgTint =
+    isHighImpact ? "rgba(255,59,92,0.04)" :
+    isCal ? "rgba(255,184,0,0.04)" :
+    undefined;
+
+  const accentBarColor =
+    isHighImpact ? C.red :
+    isCal ? C.gold :
+    undefined;
+
   return (
-    <Animated.View style={{ opacity, transform: [{ translateX }] }}>
-      <Card style={[styles.newsCard, { borderColor: impactBorderColor }] as any}>
-        <View style={styles.newsHeader}>
+    <Animated.View entering={FadeInLeft.delay(index * 50).springify().damping(16)}>
+      <Card style={[
+        styles.newsCard,
+        { borderColor: impactBorderColor },
+        !!cardBgTint && { backgroundColor: cardBgTint },
+      ] as any}>
+        {!!accentBarColor && (
+          <View
+            style={[
+              styles.accentBar,
+              { backgroundColor: accentBarColor },
+            ]}
+          />
+        )}
+        <View style={[styles.newsHeader, !!accentBarColor && styles.newsHeaderWithBar]}>
           <LinearGradient colors={iconBgColors} style={styles.newsIconWrap}>
             <Feather name={isCal ? "calendar" : "file-text"} size={15} color={iconColor} />
           </LinearGradient>
@@ -186,13 +222,15 @@ function NewsCard({ item, index }: { item: NewsItem; index: number }) {
         </View>
 
         {isCal && !!eventTime && (
-          <View style={styles.eventTimeRow}>
+          <View style={[styles.eventTimeRow, !!accentBarColor && styles.eventTimeRowWithBar]}>
             <Feather name="clock" size={11} color={C.gold} />
             <Text style={styles.eventTimeText}>{eventTime}</Text>
           </View>
         )}
 
-        <Text style={styles.newsTime}>{formatNewsTime(item.timestamp)}</Text>
+        <Text style={[styles.newsTime, !!accentBarColor && styles.newsTimeWithBar]}>
+          {formatNewsTime(item.timestamp)}
+        </Text>
       </Card>
     </Animated.View>
   );
@@ -215,15 +253,65 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 100 },
   skeletonList: { padding: 20, gap: 12 },
   skeletonCard: { backgroundColor: C.card, borderRadius: 20, padding: 16, borderWidth: 1, borderColor: C.cardBorder },
+  // Empty state
+  emptyContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 40,
+    paddingBottom: 80,
+  },
+  emptyIconWrap: {
+    marginBottom: 24,
+  },
+  emptyIconGradient: {
+    width: 80,
+    height: 80,
+    borderRadius: 24,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontFamily: "Inter_700Bold",
+    color: C.text,
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    color: C.textSecondary,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  // Section header
   sectionHeader: {
-    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-    paddingVertical: 12, paddingTop: 20,
+    paddingTop: 20,
+    paddingBottom: 4,
+  },
+  sectionTitleRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
   sectionTitle: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: C.text },
   sectionCountBadge: { backgroundColor: C.elevated, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
   sectionCount: { fontSize: 12, fontFamily: "Inter_500Medium", color: C.textSecondary },
-  newsCard: { marginBottom: 10 },
+  sectionDivider: { height: 1, marginTop: 6 },
+  // News card
+  newsCard: { marginBottom: 10, overflow: "hidden" },
+  accentBar: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 3,
+    borderTopLeftRadius: 20,
+    borderBottomLeftRadius: 20,
+  },
   newsHeader: { flexDirection: "row", alignItems: "flex-start" },
+  newsHeaderWithBar: { paddingLeft: 10 },
   newsIconWrap: { width: 34, height: 34, borderRadius: 10, justifyContent: "center", alignItems: "center", marginRight: 12, marginTop: 1 },
   newsContent: { flex: 1 },
   newsHeadline: { fontSize: 14, fontFamily: "Inter_500Medium", color: C.text, lineHeight: 20, marginBottom: 6 },
@@ -231,6 +319,8 @@ const styles = StyleSheet.create({
   newsSource: { fontSize: 11, fontFamily: "Inter_500Medium", color: C.textSecondary },
   newsCategory: { fontSize: 11, fontFamily: "Inter_400Regular", color: C.textTertiary },
   eventTimeRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: C.separator },
+  eventTimeRowWithBar: { marginLeft: 10 },
   eventTimeText: { fontSize: 12, fontFamily: "Inter_600SemiBold", color: C.gold },
   newsTime: { fontSize: 11, fontFamily: "Inter_400Regular", color: C.textTertiary, marginTop: 8, textAlign: "right" },
+  newsTimeWithBar: { marginRight: 0, paddingLeft: 10 },
 });

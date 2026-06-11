@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config import REDIS_CHANNELS, NIFTY_LOT_SIZE, BANKNIFTY_LOT_SIZE
 from agents.db_logger import log_trade_event, log_audit, upsert_trade
 from execution.trailing_stop import TrailingStopManager, TradePosition
+from performance.charges import net_pnl as compute_net_pnl
 
 logger = logging.getLogger("niftymind.paper_executor")
 
@@ -28,6 +29,18 @@ class PaperExecutor:
         self._winning_trades: int = 0
         self._trailing_mgr = TrailingStopManager(capital=100000)
         self._trade_positions: dict[str, TradePosition] = {}  # trade_id -> TradePosition
+        self._last_reset_date: str | None = None
+        self._partial_pnl: dict[str, float] = {}
+        # Live option premiums from the options chain feed: (underlying, strike, type) -> ltp
+        self._option_premiums: dict[tuple, float] = {}
+        self._trailing_update_running: bool = False
+
+    def _reset_daily_if_needed(self):
+        today = datetime.now(IST).strftime("%Y-%m-%d")
+        if self._last_reset_date != today:
+            self._daily_pnl = 0.0
+            self._last_reset_date = today
+            logger.info(f"Paper executor daily reset: PnL zeroed for {today}")
 
     def _recover_open_positions(self):
         """Recover OPEN positions from DB on startup so trades survive restarts."""
@@ -48,16 +61,21 @@ class PaperExecutor:
             conn.close()
             for row in rows:
                 trade_id, symbol, underlying, direction, qty, entry_price, trade_type, score, entry_time = row
+                entry_px = float(entry_price) if entry_price else 0
                 self._positions[trade_id] = {
                     "trade_id": trade_id,
                     "symbol": symbol,
                     "underlying": underlying,
                     "direction": direction,
                     "quantity": qty,
-                    "entry_price": float(entry_price) if entry_price else 0,
+                    "original_quantity": qty,
+                    "entry_price": entry_px,
                     "trade_type": trade_type or "INTRADAY",
                     "entry_time": str(entry_time) if entry_time else datetime.now(IST).isoformat(),
                     "status": "OPEN",
+                    # Premiums are well under index levels; recovered rows lack strike metadata
+                    "is_options": entry_px > 0 and entry_px < 2000,
+                    "delta": 0.5,
                 }
                 logger.info(f"Recovered position: {trade_id} {direction} {underlying} x{qty} @ {entry_price}")
             if rows:
@@ -68,7 +86,7 @@ class PaperExecutor:
     async def start(self, shutdown_event: asyncio.Event):
         logger.info("Paper Executor starting")
         self._recover_open_positions()
-        pubsub = await self.publisher.subscribe("trade_executions", "ticks")
+        pubsub = await self.publisher.subscribe("trade_executions", "ticks", "options_chain")
 
         try:
             while not shutdown_event.is_set():
@@ -90,7 +108,9 @@ class PaperExecutor:
                         channel = channel.decode()
 
                     if REDIS_CHANNELS["ticks"] in channel:
-                        self._update_price(data)
+                        await self._update_price(data)
+                    elif REDIS_CHANNELS["options_chain"] in channel:
+                        self._update_option_premiums(data)
                     elif REDIS_CHANNELS["trade_executions"] in channel:
                         await self._handle_execution_event(data)
 
@@ -115,7 +135,51 @@ class PaperExecutor:
     def _is_long(direction: str) -> bool:
         return direction.upper() in ("BULLISH", "LONG", "BUY")
 
-    def _update_price(self, tick: dict):
+    def _update_option_premiums(self, data: dict):
+        """Track live option premiums from the options chain feed for realistic fills."""
+        underlying = data.get("underlying", "")
+        for opt in data.get("options", []):
+            strike = opt.get("strike")
+            option_type = opt.get("option_type")
+            ltp = opt.get("ltp", 0)
+            if underlying and strike and option_type and ltp and ltp > 0:
+                self._option_premiums[(underlying, float(strike), option_type)] = float(ltp)
+
+    def _estimate_option_premium(self, position: dict) -> float:
+        """Current premium for an options position.
+
+        Prefers the live options chain LTP for the traded strike; falls back to a
+        delta-based estimate from the index move since entry. All long-premium:
+        a BEARISH trade holds a PE whose premium rises as the index falls.
+        """
+        underlying = position["underlying"]
+        entry_premium = position["entry_price"]
+
+        strike = position.get("strike")
+        option_type = position.get("option_type")
+        if strike and option_type:
+            live = self._option_premiums.get((underlying, float(strike), option_type))
+            if live and live > 0:
+                return live
+
+        index_price = self._latest_prices.get(underlying, 0)
+        entry_index = position.get("entry_index_price", 0)
+        if index_price <= 0 or entry_index <= 0:
+            return entry_premium
+
+        index_move = index_price - entry_index
+        if not self._is_long(position["direction"]):
+            index_move = -index_move  # PE gains when index falls
+        delta = float(position.get("delta", 0.5)) or 0.5
+        return max(0.05, entry_premium + index_move * delta)
+
+    def _current_value(self, position: dict) -> float | None:
+        """Price in the position's own scale: premium for options, index otherwise."""
+        if position.get("is_options"):
+            return self._estimate_option_premium(position)
+        return self._latest_prices.get(position["underlying"])
+
+    async def _update_price(self, tick: dict):
         symbol = tick.get("symbol", "")
         price = tick.get("ltp") or tick.get("last_price") or tick.get("close")
         if symbol and price:
@@ -126,8 +190,14 @@ class PaperExecutor:
             if underlying:
                 self._latest_prices[underlying] = p
 
-        # Run trailing stop updates for all open positions on every tick
-        asyncio.ensure_future(self._run_trailing_stop_updates())
+        # Single-flight: skip if an update pass is already in progress (ticks
+        # arrive far faster than the trailing logic needs to run).
+        if self._trade_positions and not self._trailing_update_running:
+            self._trailing_update_running = True
+            try:
+                await self._run_trailing_stop_updates()
+            finally:
+                self._trailing_update_running = False
 
     async def _handle_execution_event(self, data: dict):
         event = data.get("event", "")
@@ -138,6 +208,7 @@ class PaperExecutor:
             await self._execute_exit(data)
 
     async def _execute_entry(self, data: dict):
+        self._reset_daily_if_needed()
         trade_id = data.get("trade_id", f"PAPER-{uuid.uuid4().hex[:8]}")
         underlying = data.get("underlying", "NIFTY")
         direction = data.get("direction", "BULLISH")
@@ -168,8 +239,11 @@ class PaperExecutor:
 
         is_options = selected_strike is not None or supporting.get("entry_premium", 0) > 0
 
+        # Entry slippage: options entries are always premium BUYS (CE for bullish,
+        # PE for bearish), so slippage always raises the fill. Index/futures
+        # positions pay slippage in the trade direction.
         slippage = fill_price * 0.0005
-        if self._is_long(direction):
+        if is_options or self._is_long(direction):
             fill_price += slippage
         else:
             fill_price -= slippage
@@ -182,6 +256,7 @@ class PaperExecutor:
             "underlying": underlying,
             "direction": direction,
             "quantity": quantity,
+            "original_quantity": quantity,
             "entry_price": fill_price,
             "entry_index_price": self._latest_prices.get(underlying, 0),
             "trade_type": trade_type,
@@ -189,21 +264,29 @@ class PaperExecutor:
             "status": "OPEN",
             "unrealized_pnl": 0.0,
             "is_options": is_options,
+            "strike": (selected_strike or {}).get("strike"),
+            "option_type": (selected_strike or {}).get("option_type"),
+            "delta": float((selected_strike or {}).get("delta", 0.5) or 0.5),
         }
         self._positions[trade_id] = position
 
-        # Create a TradePosition for trailing stop management
+        # Create a TradePosition for trailing stop management.
+        # Options positions are managed in PREMIUM space, where every position is
+        # long (we buy CE or PE) — premium rising is always in our favour. So the
+        # TradePosition direction is BULLISH for options regardless of trade
+        # direction; index-scale positions keep their real direction.
         sl_points = float(supporting.get("sl_points", data.get("sl_points", 20)))
         atr = float(supporting.get("atr", data.get("atr", 0)))
-        if self._is_long(direction):
+        premium_space_direction = "BULLISH" if is_options else direction
+        if self._is_long(premium_space_direction):
             sl_price = fill_price - sl_points
         else:
             sl_price = fill_price + sl_points
         trade_pos = TradePosition(
             trade_id=trade_id,
             entry_price=fill_price,
-            sl_price=round(sl_price, 2),
-            direction=direction,
+            sl_price=round(max(0.05, sl_price), 2),
+            direction=premium_space_direction,
             quantity=quantity,
             strategy=trade_type,
             trail_atr=atr,
@@ -232,6 +315,7 @@ class PaperExecutor:
                 "executor": "paper",
                 "slippage_applied": round(slippage, 2),
                 "trade_type": trade_type,
+                "is_options": is_options,
             },
         )
 
@@ -251,12 +335,47 @@ class PaperExecutor:
             "price": fill_price,
             "trade_type": trade_type,
             "executor": "paper",
+            "is_options": is_options,
+            "delta": position["delta"],
+            "entry_index_price": position["entry_index_price"],
             "timestamp": datetime.now(IST).isoformat(),
         })
 
         logger.info(f"Paper ENTRY: {trade_id} {direction} {underlying} x{quantity} @ ₹{fill_price:,.2f}")
 
+    def _exit_price_and_gross(self, position: dict, exit_qty: int,
+                              raw_exit_price: float | None = None) -> tuple[float, float]:
+        """Exit price (with slippage) and gross P&L in the position's own scale.
+
+        Options: we SELL premium on exit (slippage reduces proceeds) and P&L is
+        always (exit - entry) since both CE and PE positions are long premium.
+        Index/futures: direction-based.
+        """
+        entry_price = position["entry_price"]
+        is_options = position.get("is_options", False)
+        direction = position["direction"]
+
+        if raw_exit_price is None:
+            if is_options:
+                raw_exit_price = self._estimate_option_premium(position)
+            else:
+                raw_exit_price = self._latest_prices.get(position["underlying"], entry_price)
+
+        slippage = raw_exit_price * 0.0005
+        if is_options or self._is_long(direction):
+            exit_price = raw_exit_price - slippage  # selling: receive a touch less
+        else:
+            exit_price = raw_exit_price + slippage  # covering a short: pay a touch more
+        exit_price = round(max(0.05, exit_price), 2)
+
+        if is_options or self._is_long(direction):
+            gross_pnl = (exit_price - entry_price) * exit_qty
+        else:
+            gross_pnl = (entry_price - exit_price) * exit_qty
+        return exit_price, round(gross_pnl, 2)
+
     async def _execute_exit(self, data: dict):
+        self._reset_daily_if_needed()
         trade_id = data.get("trade_id", "")
         exit_reason = data.get("exit_reason", "MANUAL")
 
@@ -269,46 +388,22 @@ class PaperExecutor:
         direction = position["direction"]
         quantity = position["quantity"]
         entry_price = position["entry_price"]
-
         is_options = position.get("is_options", False)
 
-        if is_options:
-            # For options: estimate exit premium from index move using ~0.5 delta
-            index_price = self._latest_prices.get(underlying, 0)
-            # Get entry index price if we stored it, else approximate
-            entry_index = position.get("entry_index_price", index_price)
-            if index_price > 0 and entry_index > 0:
-                index_move = index_price - entry_index
-                delta = 0.5  # approximate ATM delta
-                if not self._is_long(direction):
-                    index_move = -index_move  # PE gains when index falls
-                premium_change = index_move * delta
-                exit_price = max(0.05, entry_price + premium_change)
-            else:
-                exit_price = entry_price  # fallback: flat exit
-        else:
-            exit_price = self._latest_prices.get(underlying, entry_price)
+        exit_price, gross_pnl = self._exit_price_and_gross(position, quantity)
 
-        slippage = exit_price * 0.0005
-        if self._is_long(direction):
-            exit_price -= slippage
-        else:
-            exit_price += slippage
+        pnl, charges = compute_net_pnl(gross_pnl, entry_price, exit_price, quantity, is_options)
 
-        exit_price = round(exit_price, 2)
-
-        if self._is_long(direction):
-            pnl = (exit_price - entry_price) * quantity
-        else:
-            pnl = (entry_price - exit_price) * quantity
-        pnl = round(pnl, 2)
+        # Fold in any P&L already realized through partial exits
+        prior_partial = self._partial_pnl.pop(trade_id, 0.0)
+        total_trade_pnl = round(pnl + prior_partial, 2)
 
         trade_type = position.get("trade_type", "INTRADAY")
         symbol = position.get("symbol", f"{underlying} OPT")
 
         self._daily_pnl += pnl
         self._total_trades += 1
-        if pnl > 0:
+        if total_trade_pnl > 0:
             self._winning_trades += 1
 
         del self._positions[trade_id]
@@ -319,12 +414,12 @@ class PaperExecutor:
             symbol=symbol,
             underlying=underlying,
             direction=direction,
-            quantity=quantity,
+            quantity=position.get("original_quantity", quantity),
             trade_type=trade_type,
             consensus_score=0,
             entry_price=entry_price,
             exit_price=exit_price,
-            pnl=pnl,
+            pnl=total_trade_pnl,
             exit_reason=exit_reason,
             exit_time=datetime.now(IST).isoformat(),
             status="CLOSED",
@@ -341,14 +436,18 @@ class PaperExecutor:
                 "executor": "paper",
                 "entry_price": entry_price,
                 "exit_price": exit_price,
-                "slippage_applied": round(slippage, 2),
+                "gross_pnl": gross_pnl,
+                "partial_pnl_realized": prior_partial,
+                "total_trade_pnl": total_trade_pnl,
+                "charges": charges["total"],
+                "charges_breakdown": charges["breakdown"],
             },
         )
 
         log_audit(
             event_type="PAPER_EXIT",
             source="paper_executor",
-            message=f"Paper exit: {trade_id} {exit_reason} PnL=₹{pnl:,.2f}",
+            message=f"Paper exit: {trade_id} {exit_reason} PnL=₹{total_trade_pnl:,.2f}",
             trade_id=trade_id,
         )
 
@@ -364,7 +463,7 @@ class PaperExecutor:
             "timestamp": datetime.now(IST).isoformat(),
         })
 
-        logger.info(f"Paper EXIT: {trade_id} {exit_reason} PnL=₹{pnl:,.2f}")
+        logger.info(f"Paper EXIT: {trade_id} {exit_reason} PnL=₹{total_trade_pnl:,.2f}")
 
         # Notify learning system
         try:
@@ -374,9 +473,9 @@ class PaperExecutor:
                 "direction": direction,
                 "entry_price": entry_price,
                 "exit_price": exit_price,
-                "pnl": pnl,
+                "pnl": total_trade_pnl,
                 "exit_reason": exit_reason,
-                "trade_type": self._positions.get(trade_id, {}).get("trade_type", "INTRADAY"),
+                "trade_type": trade_type,
                 "market_regime": "NORMAL",
                 "timestamp": datetime.now(IST).isoformat(),
             })
@@ -384,7 +483,11 @@ class PaperExecutor:
             logger.warning(f"Failed to publish trade_closed for learning: {e}")
 
     async def _run_trailing_stop_updates(self):
-        """Run TrailingStopManager.update() for all open positions and process returned actions."""
+        """Run TrailingStopManager.update() for all open positions and process returned actions.
+
+        For options positions the comparison price is the (live or estimated)
+        PREMIUM, matching the premium-scale entry/SL/targets in TradePosition.
+        """
         for trade_id in list(self._trade_positions.keys()):
             trade_pos = self._trade_positions.get(trade_id)
             if trade_pos is None or trade_pos.remaining_quantity <= 0:
@@ -394,13 +497,12 @@ class PaperExecutor:
             if position is None:
                 continue
 
-            underlying = position["underlying"]
-            current_price = self._latest_prices.get(underlying)
-            if current_price is None:
+            current_value = self._current_value(position)
+            if current_value is None:
                 continue
 
             current_atr = trade_pos.trail_atr if trade_pos.trail_atr > 0 else None
-            actions = self._trailing_mgr.update(trade_pos, current_price, current_atr)
+            actions = self._trailing_mgr.update(trade_pos, current_value, current_atr)
 
             # Also check time-based exits
             time_action = self._trailing_mgr.check_time_exit(trade_pos)
@@ -408,10 +510,13 @@ class PaperExecutor:
                 actions.append(time_action)
 
             for action in actions:
-                await self._process_trailing_action(action, position, current_price)
+                await self._process_trailing_action(action, position, current_value)
 
-    async def _process_trailing_action(self, action: dict, position: dict, current_price: float):
-        """Process a trailing stop action (PARTIAL_EXIT, FULL_EXIT_SL, TIME_EXIT, etc.)."""
+    async def _process_trailing_action(self, action: dict, position: dict, current_value: float):
+        """Process a trailing stop action (PARTIAL_EXIT, FULL_EXIT_SL, TIME_EXIT, etc.).
+
+        current_value is in the position's own scale (premium for options).
+        """
         action_type = action.get("action", "")
         trade_id = action.get("trade_id", "")
         exit_qty = action.get("quantity", 0)
@@ -420,29 +525,21 @@ class PaperExecutor:
         if exit_qty <= 0:
             return
 
-        underlying = position["underlying"]
-        direction = position["direction"]
-        entry_price = position["entry_price"]
-
-        # Simulate exit price with slippage
-        exit_price = current_price
-        slippage = exit_price * 0.0005
-        if self._is_long(direction):
-            exit_price -= slippage
-        else:
-            exit_price += slippage
-        exit_price = round(exit_price, 2)
-
-        if self._is_long(direction):
-            pnl = (exit_price - entry_price) * exit_qty
-        else:
-            pnl = (entry_price - exit_price) * exit_qty
-        pnl = round(pnl, 2)
-
         if action_type == "PARTIAL_EXIT":
+            underlying = position["underlying"]
+            direction = position["direction"]
+            entry_price = position["entry_price"]
+            is_options = position.get("is_options", False)
+
+            exit_price, gross_pnl = self._exit_price_and_gross(
+                position, exit_qty, raw_exit_price=current_value
+            )
+            pnl, charges = compute_net_pnl(gross_pnl, entry_price, exit_price, exit_qty, is_options)
+
             # Partial exit: reduce position quantity, log the partial fill
             position["quantity"] -= exit_qty
             self._daily_pnl += pnl
+            self._partial_pnl[trade_id] = self._partial_pnl.get(trade_id, 0.0) + pnl
 
             target_idx = action.get("target_index", "?")
             log_trade_event(
@@ -456,6 +553,9 @@ class PaperExecutor:
                     "executor": "paper",
                     "reason": reason,
                     "remaining_qty": position["quantity"],
+                    "gross_pnl": gross_pnl,
+                    "charges": charges["total"],
+                    "charges_breakdown": charges["breakdown"],
                 },
             )
             log_audit(
@@ -496,7 +596,8 @@ class PaperExecutor:
             return
 
         self._total_trades += 1
-        if self._daily_pnl > 0:
+        trade_pnl = self._partial_pnl.pop(trade_id, 0.0)
+        if trade_pnl > 0:
             self._winning_trades += 1
 
         del self._positions[trade_id]
@@ -504,49 +605,63 @@ class PaperExecutor:
 
         upsert_trade(
             trade_id=trade_id,
-            symbol=f"{position['underlying']} OPT",
+            symbol=position.get("symbol", f"{position['underlying']} OPT"),
             underlying=position["underlying"],
             direction=position["direction"],
-            quantity=position.get("quantity", 0),
+            quantity=position.get("original_quantity", position.get("quantity", 0)),
             trade_type=position.get("trade_type", "INTRADAY"),
             consensus_score=0,
             entry_price=position["entry_price"],
             exit_price=last_exit_price,
-            pnl=0,  # PnL already accumulated via partial exits
+            pnl=round(trade_pnl, 2),
             exit_reason=reason,
             exit_time=datetime.now(IST).isoformat(),
             status="CLOSED",
         )
 
-        logger.info(f"Paper position fully closed via partial exits: {trade_id}")
+        await self.publisher.publish_trade_execution({
+            "event": "EXIT",
+            "trade_id": trade_id,
+            "underlying": position["underlying"],
+            "direction": position["direction"],
+            "quantity": position.get("original_quantity", 0),
+            "price": last_exit_price,
+            "pnl": round(trade_pnl, 2),
+            "executor": "paper",
+            "timestamp": datetime.now(IST).isoformat(),
+        })
+
+        # Notify learning system for fully-scaled-out trades too
+        try:
+            await self.publisher.publish("trade_closed", {
+                "trade_id": trade_id,
+                "underlying": position["underlying"],
+                "direction": position["direction"],
+                "entry_price": position["entry_price"],
+                "exit_price": last_exit_price,
+                "pnl": round(trade_pnl, 2),
+                "exit_reason": reason,
+                "trade_type": position.get("trade_type", "INTRADAY"),
+                "market_regime": "NORMAL",
+                "timestamp": datetime.now(IST).isoformat(),
+            })
+        except Exception as e:
+            logger.warning(f"Failed to publish trade_closed for learning: {e}")
+
+        logger.info(f"Paper position fully closed via partial exits: {trade_id} PnL=₹{trade_pnl:,.2f}")
 
     def get_open_positions(self) -> list[dict]:
         for pos in self._positions.values():
-            underlying = pos["underlying"]
             entry_price = pos["entry_price"]
-            is_options = pos.get("is_options", False)
+            current_value = self._current_value(pos)
+            if current_value is None:
+                current_value = entry_price
 
-            if is_options:
-                # Estimate current premium from index movement
-                index_price = self._latest_prices.get(underlying, 0)
-                entry_index = pos.get("entry_index_price", index_price)
-                if index_price > 0 and entry_index > 0:
-                    index_move = index_price - entry_index
-                    delta = 0.5
-                    if not self._is_long(pos["direction"]):
-                        index_move = -index_move
-                    current_premium = max(0.05, entry_price + index_move * delta)
-                else:
-                    current_premium = entry_price
-                pos["current_price"] = round(current_premium, 2)
-                pos["unrealized_pnl"] = round((current_premium - entry_price) * pos["quantity"], 2)
+            pos["current_price"] = round(current_value, 2)
+            if pos.get("is_options", False) or self._is_long(pos["direction"]):
+                pos["unrealized_pnl"] = round((current_value - entry_price) * pos["quantity"], 2)
             else:
-                current_price = self._latest_prices.get(underlying, entry_price)
-                pos["current_price"] = current_price
-                if self._is_long(pos["direction"]):
-                    pos["unrealized_pnl"] = round((current_price - entry_price) * pos["quantity"], 2)
-                else:
-                    pos["unrealized_pnl"] = round((entry_price - current_price) * pos["quantity"], 2)
+                pos["unrealized_pnl"] = round((entry_price - current_value) * pos["quantity"], 2)
         return list(self._positions.values())
 
     def get_stats(self) -> dict:

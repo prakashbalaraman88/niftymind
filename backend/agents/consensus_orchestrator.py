@@ -92,7 +92,8 @@ DIRECTION_SCORES = {"BULLISH": 1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}
 
 class ConsensusOrchestrator(BaseAgent):
     def __init__(self, redis_publisher, llm_config=None, consensus_threshold: float = 0.65,
-                 accuracy_tracker=None, pre_trade_recall=None, outcome_model=None):
+                 accuracy_tracker=None, pre_trade_recall=None, outcome_model=None,
+                 capital: float = 100000):
         super().__init__("agent_12_consensus", "Consensus Orchestrator", redis_publisher)
         self._latest_signals: dict[str, dict] = {}
         self._consensus_threshold = consensus_threshold
@@ -102,7 +103,7 @@ class ConsensusOrchestrator(BaseAgent):
         self._accuracy_tracker = accuracy_tracker
         self._pre_trade_recall = pre_trade_recall
         self._outcome_model = outcome_model
-        self._strike_selector = StrikeSelector(capital=100000)
+        self._strike_selector = StrikeSelector(capital=capital)
         self._latest_options: dict[str, list] = {}  # underlying -> options chain
         self._latest_spot: dict[str, float] = {}  # underlying -> spot price
 
@@ -281,7 +282,7 @@ class ConsensusOrchestrator(BaseAgent):
         # Learning system: model win probability
         if self._outcome_model:
             try:
-                win_prob = self._outcome_model.predict(proposal["supporting_data"])
+                win_prob = self._outcome_model.predict(proposal)
                 proposal["supporting_data"]["model_win_probability"] = round(win_prob, 3)
                 self.logger.info(f"Model win probability for {trade_id}: {win_prob:.1%}")
             except Exception as e:
@@ -356,16 +357,17 @@ class ConsensusOrchestrator(BaseAgent):
         return weighted_score, consensus_direction, vote_details
 
     def _format_expiry(self) -> str:
-        """Format current weekly expiry for options symbol e.g. '26APR' or '2640710'."""
-        from calendar import monthrange
+        """Format the nearest weekly expiry for display symbols, e.g. '26JUN16'.
+
+        NSE index weekly expiry moved to TUESDAY effective 1 Sep 2025.
+        """
         now = datetime.now(IST)
-        year_short = str(now.year)[-2:]
-        month_abbr = now.strftime("%b").upper()
-        # Find next Thursday (weekly expiry)
-        days_ahead = (3 - now.weekday()) % 7  # Thursday = 3
+        days_ahead = (1 - now.weekday()) % 7  # Tuesday = 1
         if days_ahead == 0 and now.hour >= 15:
             days_ahead = 7
         expiry = now + timedelta(days=days_ahead)
+        year_short = str(expiry.year)[-2:]
+        month_abbr = expiry.strftime("%b").upper()
         return f"{year_short}{month_abbr}{expiry.day:02d}"
 
     def _determine_underlying(self) -> str:

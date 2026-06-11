@@ -188,8 +188,10 @@ class TradingConfig:
     )
 
 
-NIFTY_LOT_SIZE = 25
-BANKNIFTY_LOT_SIZE = 15
+# NSE lot sizes effective January 2026 contracts (NSE circular: NIFTY 75→65, BANKNIFTY 35→30).
+# Env-overridable so the next exchange revision doesn't need a code change.
+NIFTY_LOT_SIZE = _env_int("NIFTY_LOT_SIZE", 65)
+BANKNIFTY_LOT_SIZE = _env_int("BANKNIFTY_LOT_SIZE", 30)
 
 
 @dataclass(frozen=True)

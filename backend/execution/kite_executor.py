@@ -9,6 +9,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config import REDIS_CHANNELS, NIFTY_LOT_SIZE, BANKNIFTY_LOT_SIZE
 from agents.db_logger import log_trade_event, log_audit, upsert_trade
+from performance.charges import net_pnl as compute_net_pnl
 
 logger = logging.getLogger("niftymind.kite_executor")
 
@@ -31,6 +32,14 @@ class KiteExecutor:
         self._daily_pnl: float = 0.0
         self._total_trades: int = 0
         self._winning_trades: int = 0
+        self._last_reset_date: str | None = None
+
+    def _reset_daily_if_needed(self):
+        today = datetime.now(IST).strftime("%Y-%m-%d")
+        if self._last_reset_date != today:
+            self._daily_pnl = 0.0
+            self._last_reset_date = today
+            logger.info(f"Kite executor daily reset: PnL zeroed for {today}")
 
     def _init_kite(self):
         if self._kite is not None:
@@ -120,11 +129,17 @@ class KiteExecutor:
         if quantity % lot_size != 0:
             quantity = max(lot_size, (quantity // lot_size) * lot_size)
 
-        transaction_type = "BUY" if direction == "BULLISH" else "SELL"
-        trading_symbol = self._resolve_trading_symbol(underlying, direction)
+        # Long-options-only system: a bearish trade BUYS a PE — the option type
+        # encodes direction. SELL here would WRITE options (inverted risk,
+        # massive margin). Entries are always premium buys.
+        transaction_type = "BUY"
+        index_price = float(data.get("supporting_data", {}).get("entry_index_price", 0))
+        trading_symbol = self._resolve_trading_symbol(underlying, direction, index_price)
         product = "MIS" if trade_type in ("SCALP", "INTRADAY") else "NRML"
 
-        use_bracket = trade_type in ("SCALP", "INTRADAY") and sl_points > 0 and target_points > 0
+        # Zerodha discontinued bracket orders (variety="bo") in March 2020 —
+        # they are rejected by the API. Always use regular orders with SL+target.
+        use_bracket = False
 
         try:
             sl_order_id = None
@@ -155,12 +170,9 @@ class KiteExecutor:
 
             self._order_map[trade_id] = str(order_id)
 
-            if direction == "BULLISH":
-                sl_price = round(fill_price - sl_points, 2)
-                target_price = round(fill_price + target_points, 2)
-            else:
-                sl_price = round(fill_price + sl_points, 2)
-                target_price = round(fill_price - target_points, 2)
+            # Premium space: long CE/PE both lose when premium falls, gain when it rises
+            sl_price = round(max(0.05, fill_price - sl_points), 2)
+            target_price = round(fill_price + target_points, 2)
 
             position = {
                 "trade_id": trade_id,
@@ -319,12 +331,9 @@ class KiteExecutor:
         target_order_id = None
 
         if fill_price > 0 and sl_points > 0:
-            if direction == "BULLISH":
-                sl_trigger = round(fill_price - sl_points, 1)
-                sl_limit = round(sl_trigger - 1.0, 1)
-            else:
-                sl_trigger = round(fill_price + sl_points, 1)
-                sl_limit = round(sl_trigger + 1.0, 1)
+            # SL for a long premium position: SELL when premium drops to trigger
+            sl_trigger = round(max(0.1, fill_price - sl_points), 1)
+            sl_limit = round(max(0.05, sl_trigger - 1.0), 1)
 
             try:
                 sl_order_id = str(await asyncio.to_thread(
@@ -344,10 +353,8 @@ class KiteExecutor:
                 logger.error(f"SL order placement failed: {e}")
 
         if fill_price > 0 and target_points > 0:
-            if direction == "BULLISH":
-                target_limit = round(fill_price + target_points, 1)
-            else:
-                target_limit = round(fill_price - target_points, 1)
+            # Target for a long premium position: SELL when premium rises to limit
+            target_limit = round(fill_price + target_points, 1)
 
             try:
                 target_order_id = str(await asyncio.to_thread(
@@ -557,35 +564,24 @@ class KiteExecutor:
                 continue
 
             child_txn = order.get("transaction_type", "")
-            parent_txn = "BUY" if position["direction"] == "BULLISH" else "SELL"
+            parent_txn = "BUY"  # entries are always premium buys
 
             if child_txn != parent_txn:
                 exit_price = float(order.get("average_price", 0))
                 entry_price = position["entry_price"]
                 quantity = position["quantity"]
 
-                if position["direction"] == "BULLISH":
-                    pnl = (exit_price - entry_price) * quantity
-                else:
-                    pnl = (entry_price - exit_price) * quantity
-                pnl = round(pnl, 2)
+                # Long premium: P&L and SL/target classification are direction-agnostic
+                gross_pnl = round((exit_price - entry_price) * quantity, 2)
 
-                if position["direction"] == "BULLISH":
-                    if exit_price <= position.get("sl_price", 0):
-                        exit_reason = "SL_HIT"
-                    elif exit_price >= position.get("target_price", float("inf")):
-                        exit_reason = "TARGET_HIT"
-                    else:
-                        exit_reason = "BRACKET_EXIT"
+                if exit_price <= position.get("sl_price", 0):
+                    exit_reason = "SL_HIT"
+                elif exit_price >= position.get("target_price", float("inf")):
+                    exit_reason = "TARGET_HIT"
                 else:
-                    if exit_price >= position.get("sl_price", float("inf")):
-                        exit_reason = "SL_HIT"
-                    elif exit_price <= position.get("target_price", 0):
-                        exit_reason = "TARGET_HIT"
-                    else:
-                        exit_reason = "BRACKET_EXIT"
+                    exit_reason = "BRACKET_EXIT"
 
-                await self._finalize_exit(trade_id, exit_price, pnl, exit_reason, str(order.get("order_id", "")))
+                await self._finalize_exit(trade_id, exit_price, gross_pnl, exit_reason, str(order.get("order_id", "")))
                 bo["status"] = "COMPLETED"
                 break
 
@@ -606,11 +602,8 @@ class KiteExecutor:
             entry_price = position["entry_price"]
             quantity = position["quantity"]
 
-            if position["direction"] == "BULLISH":
-                pnl = (exit_price - entry_price) * quantity
-            else:
-                pnl = (entry_price - exit_price) * quantity
-            pnl = round(pnl, 2)
+            # Long premium: direction-agnostic P&L
+            gross_pnl = round((exit_price - entry_price) * quantity, 2)
 
             exit_reason = "SL_HIT" if oid == sl_child else "TARGET_HIT"
 
@@ -626,12 +619,13 @@ class KiteExecutor:
                 except Exception as e:
                     logger.warning(f"Failed to cancel counterpart order {other_id}: {e}")
 
-            await self._finalize_exit(trade_id, exit_price, pnl, exit_reason, oid)
+            await self._finalize_exit(trade_id, exit_price, gross_pnl, exit_reason, oid)
             bo["status"] = "COMPLETED"
             break
 
-    async def _finalize_exit(self, trade_id: str, exit_price: float, pnl: float,
+    async def _finalize_exit(self, trade_id: str, exit_price: float, gross_pnl: float,
                               exit_reason: str, exit_order_id: str):
+        self._reset_daily_if_needed()
         position = self._positions.get(trade_id)
         if not position:
             return
@@ -641,6 +635,8 @@ class KiteExecutor:
         quantity = position["quantity"]
         trading_symbol = position["trading_symbol"]
         entry_price = position["entry_price"]
+
+        pnl, charges = compute_net_pnl(gross_pnl, entry_price, exit_price, quantity, is_options=True)
 
         self._daily_pnl += pnl
         self._total_trades += 1
@@ -678,6 +674,9 @@ class KiteExecutor:
                 "exit_order_id": exit_order_id,
                 "trading_symbol": trading_symbol,
                 "entry_price": entry_price,
+                "gross_pnl": gross_pnl,
+                "charges": charges["total"],
+                "charges_breakdown": charges["breakdown"],
             },
         )
 
@@ -748,7 +747,7 @@ class KiteExecutor:
                     except Exception as e:
                         logger.warning(f"Failed to cancel {child_key} {child_id}: {e}")
 
-        transaction_type = "SELL" if direction == "BULLISH" else "BUY"
+        transaction_type = "SELL"  # closing a long premium position
 
         try:
             # Use smart order routing for exit instead of plain market order
@@ -765,11 +764,8 @@ class KiteExecutor:
                 logger.info(f"Smart order exit slippage for {trading_symbol}: ₹{smart_result['slippage']:,.2f}"
                             f"{' (market fallback)' if smart_result.get('fallback_market') else ''}")
 
-            if direction == "BULLISH":
-                pnl = (exit_price - entry_price) * quantity
-            else:
-                pnl = (entry_price - exit_price) * quantity
-            pnl = round(pnl, 2)
+            # Long premium: direction-agnostic P&L
+            pnl = round((exit_price - entry_price) * quantity, 2)
 
             await self._finalize_exit(trade_id, exit_price, pnl, exit_reason, str(order_id))
 
@@ -782,30 +778,73 @@ class KiteExecutor:
                 trade_id=trade_id,
             )
 
-    def _resolve_trading_symbol(self, underlying: str, direction: str) -> str:
+    @staticmethod
+    def _last_tuesday_of_month(year: int, month: int):
+        """Last Tuesday of a month — NSE monthly expiry day since Sep 2025."""
+        import calendar
+        from datetime import date
+        last_day = calendar.monthrange(year, month)[1]
+        d = date(year, month, last_day)
+        offset = (d.weekday() - 1) % 7  # Tuesday = 1
+        return d - timedelta(days=offset)
+
+    def _resolve_trading_symbol(self, underlying: str, direction: str, index_price: float = 0) -> str:
+        """Resolve the NFO trading symbol for the nearest expiry.
+
+        NSE expiry days since 1 Sep 2025: NIFTY weekly on TUESDAY; BANKNIFTY
+        weeklies discontinued (Nov 2024) — monthly only, last Tuesday of month.
+        Zerodha symbology: monthly = NIFTY{YY}{MMM}{strike}{CE/PE},
+        weekly = NIFTY{YY}{M}{DD}{strike}{CE/PE} with M in 1-9/O/N/D.
+        """
         now = datetime.now(IST)
         today = now.date()
-        days_until_thursday = (3 - today.weekday()) % 7
-        if days_until_thursday == 0 and now.time() > datetime.strptime("15:30", "%H:%M").time():
-            days_until_thursday = 7
-        from datetime import timedelta as td
-        expiry = today + td(days=days_until_thursday)
-
-        year_suffix = expiry.strftime("%y")
-        month_names = ["", "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-                       "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+        market_closed = now.time() > datetime.strptime("15:30", "%H:%M").time()
 
         if underlying == "BANKNIFTY":
             prefix = "BANKNIFTY"
-            strike_base = 48000
+            expiry = self._last_tuesday_of_month(today.year, today.month)
+            if expiry < today or (expiry == today and market_closed):
+                ny, nm = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
+                expiry = self._last_tuesday_of_month(ny, nm)
+            expiry_str = f"{expiry.strftime('%y')}{expiry.strftime('%b').upper()}"
+            if index_price > 0:
+                strike_base = round(index_price / 100) * 100
+            else:
+                try:
+                    quote = self._kite.quote(["NSE:NIFTY BANK"])
+                    strike_base = round(float(quote.get("NSE:NIFTY BANK", {}).get("last_price", 52000)) / 100) * 100
+                except Exception:
+                    strike_base = 52000
         else:
             prefix = "NIFTY"
-            strike_base = 22000
+            days_until_tuesday = (1 - today.weekday()) % 7  # Tuesday = 1
+            if days_until_tuesday == 0 and market_closed:
+                days_until_tuesday = 7
+            expiry = today + timedelta(days=days_until_tuesday)
+            if expiry == self._last_tuesday_of_month(expiry.year, expiry.month):
+                # The last weekly of the month IS the monthly contract
+                expiry_str = f"{expiry.strftime('%y')}{expiry.strftime('%b').upper()}"
+            else:
+                month_code = "OND"[expiry.month - 10] if expiry.month >= 10 else str(expiry.month)
+                expiry_str = f"{expiry.strftime('%y')}{month_code}{expiry.day:02d}"
+            if index_price > 0:
+                strike_base = round(index_price / 50) * 50
+            else:
+                try:
+                    quote = self._kite.quote(["NSE:NIFTY 50"])
+                    strike_base = round(float(quote.get("NSE:NIFTY 50", {}).get("last_price", 24500)) / 50) * 50
+                except Exception:
+                    strike_base = 24500
 
         option_type = "CE" if direction == "BULLISH" else "PE"
-        expiry_str = f"{year_suffix}{month_names[expiry.month]}{expiry.day:02d}"
-
         return f"{prefix}{expiry_str}{strike_base}{option_type}"
+
+    def update_access_token(self, access_token: str):
+        """Update Zerodha access token (called after OAuth callback)."""
+        self._access_token = access_token
+        if self._kite is not None:
+            self._kite.set_access_token(access_token)
+        logger.info("Kite access token updated")
 
     def get_open_positions(self) -> list[dict]:
         return list(self._positions.values())

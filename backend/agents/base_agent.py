@@ -130,8 +130,10 @@ class BaseAgent(ABC):
         return MARKET_CLOSE < now <= POST_MARKET_CLOSE
 
     def is_expiry_day(self) -> bool:
+        # NSE moved index derivative expiries to TUESDAY effective 1 Sep 2025
+        # (NIFTY weekly every Tuesday; BANKNIFTY monthly on last Tuesday).
         today = datetime.now(IST).date()
-        return today.weekday() == 3
+        return today.weekday() == 1
 
     def should_run(self) -> bool:
         return self.is_market_hours()

@@ -7,6 +7,8 @@ import type {
   NewsItem,
   Settings,
   ZerodhaStatus,
+  DailyPnlEntry,
+  PerformanceMetrics,
 } from "@/types/api";
 import { supabase } from "@/lib/supabase";
 
@@ -102,6 +104,23 @@ export const api = {
   // ── Auth ───────────────────────────────────────────────
   getMe: () =>
     fetchJson<{ user_id: string; email: string; role: string }>("/auth/me"),
+
+  // ── Performance ────────────────────────────────────────
+  getPerformance: () =>
+    fetchJson<{ metrics: PerformanceMetrics; proof_gate: Record<string, unknown> }>("/performance"),
+
+  getDailyPnl: () =>
+    fetchJson<{ daily: DailyPnlEntry[]; total_days: number }>("/performance/daily"),
+
+  getDrawdown: () =>
+    fetchJson<Record<string, unknown>>("/drawdown"),
+
+  exportTradesCsv: (status?: string) => {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    const qs = params.toString();
+    return `${API_PREFIX}/trades/export/csv${qs ? "?" + qs : ""}`;
+  },
 };
 
 export const getWsUrl = (): string => {

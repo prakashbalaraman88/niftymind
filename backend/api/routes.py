@@ -5,7 +5,9 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
+import csv
+import io
 
 from api.server import get_app_state
 from api.auth_middleware import get_current_user, optional_user
@@ -492,6 +494,10 @@ async def get_performance():
 
 @router.get("/drawdown")
 async def get_drawdown():
+    state = get_app_state()
+    risk_manager = state.get("risk_manager")
+    if risk_manager and hasattr(risk_manager, "_drawdown_mgr"):
+        return risk_manager._drawdown_mgr.get_status()
     return drawdown_manager.get_status()
 
 
@@ -626,9 +632,9 @@ async def zerodha_status():
 
 @router.post("/paper/mock-trade")
 async def inject_mock_trade(
-    underlying: str = Query("NIFTY", regex="^(NIFTY|BANKNIFTY)$"),
-    direction: str = Query("BULLISH", regex="^(BULLISH|BEARISH)$"),
-    trade_type: str = Query("INTRADAY", regex="^(INTRADAY|SCALP|BTST)$"),
+    underlying: str = Query("NIFTY", pattern="^(NIFTY|BANKNIFTY)$"),
+    direction: str = Query("BULLISH", pattern="^(BULLISH|BEARISH)$"),
+    trade_type: str = Query("INTRADAY", pattern="^(INTRADAY|SCALP|BTST)$"),
     symbol: str = Query(""),
 ):
     """Inject a paper trade directly through the executor (market-closed testing).
@@ -696,6 +702,94 @@ async def exit_mock_trade(trade_id: str, exit_reason: str = Query("MANUAL_TEST")
     })
 
     return {"status": "exit_sent", "trade_id": trade_id, "exit_reason": exit_reason}
+
+
+@router.get("/trades/export/csv")
+async def export_trades_csv(
+    status: str | None = Query(None),
+    trade_type: str | None = Query(None),
+):
+    """Export trades as CSV download."""
+    conn = _db_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    try:
+        cur = conn.cursor()
+        query = ("SELECT trade_id, symbol, underlying, direction, entry_price, exit_price, "
+                 "sl_price, target_price, quantity, status, pnl, exit_reason, trade_type, "
+                 "entry_time, exit_time FROM trades")
+        conditions, params = [], []
+        if status:
+            conditions.append("status = %s"); params.append(status)
+        if trade_type:
+            conditions.append("trade_type = %s"); params.append(trade_type)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY created_at DESC"
+        cur.execute(query, params)
+        cols = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+        conn.close()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(cols)
+        for row in rows:
+            writer.writerow([v.isoformat() if hasattr(v, 'isoformat') else v for v in row])
+        output.seek(0)
+        filename = f"trades_{datetime.now(IST).strftime('%Y%m%d_%H%M%S')}.csv"
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except Exception as e:
+        logger.error(f"CSV export failed: {e}")
+        raise HTTPException(status_code=500, detail="Export failed")
+
+
+@router.get("/performance/daily")
+async def get_daily_pnl():
+    """Return daily P&L aggregates and equity curve."""
+    conn = _db_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT DATE(exit_time AT TIME ZONE 'Asia/Kolkata') as trade_date,
+                      COUNT(*) as total_trades,
+                      SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as winners,
+                      SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losers,
+                      SUM(pnl) as daily_pnl,
+                      MAX(pnl) as best_trade,
+                      MIN(pnl) as worst_trade
+               FROM trades
+               WHERE status = 'CLOSED' AND pnl IS NOT NULL AND exit_time IS NOT NULL
+               GROUP BY trade_date
+               ORDER BY trade_date DESC
+               LIMIT 90"""
+        )
+        cols = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+        conn.close()
+
+        daily = []
+        cumulative = 0.0
+        for row in reversed(rows):
+            d = dict(zip(cols, row))
+            d["trade_date"] = str(d["trade_date"])
+            for k in ("daily_pnl", "best_trade", "worst_trade"):
+                d[k] = float(d[k] or 0)
+            cumulative += d["daily_pnl"]
+            d["cumulative_pnl"] = round(cumulative, 2)
+            daily.append(d)
+
+        daily.reverse()
+        return {"daily": daily, "total_days": len(daily)}
+    except Exception as e:
+        logger.error(f"Daily P&L failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch daily P&L")
 
 
 @router.get("/healthz")

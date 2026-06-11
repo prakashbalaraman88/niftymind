@@ -1,12 +1,22 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   RefreshControl,
-  Animated,
 } from "react-native";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  withRepeat,
+  withSequence,
+  FadeInDown,
+  interpolateColor,
+  useAnimatedProps,
+} from "react-native-reanimated";
 import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -122,116 +132,188 @@ function AgentCard({
   direction?: string;
   index: number;
 }) {
-  const opacity = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(20)).current;
-  const dotScale = useRef(new Animated.Value(1)).current;
-  const confBarWidth = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(opacity, { toValue: 1, duration: 400, delay: index * 55, useNativeDriver: true }),
-      Animated.spring(translateY, { toValue: 0, delay: index * 55, useNativeDriver: true, damping: 16 }),
-    ]).start();
-  }, []);
-
-  useEffect(() => {
-    const confidence = latest?.confidence ?? 0;
-    Animated.timing(confBarWidth, {
-      toValue: confidence,
-      duration: 800,
-      useNativeDriver: false,
-    }).start();
-  }, [latest?.confidence]);
-
-  useEffect(() => {
-    if (isStale) return;
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(dotScale, { toValue: 1.6, duration: 800, useNativeDriver: true }),
-        Animated.timing(dotScale, { toValue: 1, duration: 800, useNativeDriver: true }),
-      ])
-    );
-    anim.start();
-    return () => anim.stop();
-  }, [isStale]);
+  const barWidth = useSharedValue(0);
+  const dotScale = useSharedValue(1);
+  const dotOpacity = useSharedValue(isStale ? 0 : 1);
+  const cardGlow = useSharedValue(0);
 
   const dirColor =
     direction === "BULLISH" ? C.green :
     direction === "BEARISH" ? C.red :
     C.accentBright;
 
-  const iconBg =
-    direction === "BULLISH" ? C.greenDark :
-    direction === "BEARISH" ? C.redDark :
-    C.accentLight;
+  const glowColor =
+    direction === "BULLISH" ? "rgba(0,200,100,0.12)" :
+    direction === "BEARISH" ? "rgba(255,70,70,0.12)" :
+    "rgba(100,120,255,0.10)";
+
+  // Animate confidence bar when signal arrives
+  useEffect(() => {
+    const confidence = latest?.confidence ?? 0;
+    barWidth.value = withTiming(confidence, { duration: 900 });
+  }, [latest?.confidence]);
+
+  // Pulse active dot when not stale
+  useEffect(() => {
+    dotOpacity.value = withTiming(isStale ? 0 : 1, { duration: 300 });
+    if (!isStale) {
+      dotScale.value = withRepeat(
+        withSequence(
+          withTiming(1.8, { duration: 700 }),
+          withTiming(1, { duration: 700 })
+        ),
+        -1
+      );
+    } else {
+      dotScale.value = withTiming(1, { duration: 300 });
+    }
+  }, [isStale]);
+
+  // Glow pulse when active
+  useEffect(() => {
+    if (!isStale && latest) {
+      cardGlow.value = withRepeat(
+        withSequence(
+          withTiming(1, { duration: 1800 }),
+          withTiming(0.3, { duration: 1800 })
+        ),
+        -1
+      );
+    } else {
+      cardGlow.value = withTiming(0, { duration: 400 });
+    }
+  }, [isStale, latest]);
+
+  const barStyle = useAnimatedStyle(() => ({
+    width: `${barWidth.value * 100}%` as any,
+  }));
+
+  const dotStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: dotScale.value }],
+    opacity: dotOpacity.value,
+  }));
+
+  const glowStyle = useAnimatedStyle(() => ({
+    opacity: cardGlow.value,
+  }));
+
+  const cardStyle = useAnimatedStyle(() => ({
+    opacity: isStale ? 0.62 : 1,
+  }));
+
+  const iconGradient: [string, string] =
+    direction === "BULLISH" ? (C.gradient?.profit as [string, string] ?? ["#00C864", "#00A050"]) :
+    direction === "BEARISH" ? (C.gradient?.loss as [string, string] ?? ["#FF4646", "#CC2222"]) :
+    (C.gradient?.accent as [string, string] ?? ["#6478FF", "#4455DD"]);
 
   return (
-    <Animated.View style={{ opacity, transform: [{ translateY }] }}>
-      <Card style={[styles.agentCard, isStale ? styles.staleCard : null] as any}>
-        <View style={styles.agentHeader}>
-          <LinearGradient
-            colors={direction === "BULLISH" ? C.gradient.profit : direction === "BEARISH" ? C.gradient.loss : C.gradient.accent}
-            style={styles.agentIconWrap}
-          >
-            <Feather name={info.icon} size={16} color="#fff" />
-          </LinearGradient>
-          <View style={styles.agentInfo}>
-            <Text style={styles.agentName}>{info.name}</Text>
-            <Text style={styles.agentId}>{agentId.replace("_", " #")}</Text>
-          </View>
-          <View style={styles.agentBadges}>
-            {direction ? (
-              <StatusBadge label={direction} variant={dirVariant} />
-            ) : (
-              <StatusBadge label="Idle" variant="inactive" />
-            )}
-            <Animated.View style={[styles.activeDot, {
-              backgroundColor: isStale ? C.textQuaternary : C.green,
-              transform: [{ scale: dotScale }],
-              shadowColor: isStale ? "transparent" : C.green,
-            }]} />
-          </View>
-        </View>
+    <Animated.View
+      entering={FadeInDown.delay(index * 60).springify().damping(14)}
+      style={cardStyle}
+    >
+      <View style={styles.cardWrapper}>
+        {/* Glow overlay */}
+        {!isStale && latest && (
+          <Animated.View
+            style={[
+              StyleSheet.absoluteFill,
+              styles.glowOverlay,
+              { backgroundColor: glowColor },
+              glowStyle,
+            ]}
+            pointerEvents="none"
+          />
+        )}
 
-        {latest && (
-          <View style={styles.latestSignal}>
-            <View style={styles.signalRow}>
-              <Text style={styles.signalLabel}>Confidence</Text>
-              <View style={styles.confBarOuter}>
-                <Animated.View style={[styles.confBarInner, {
-                  width: confBarWidth.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }),
-                  backgroundColor: dirColor,
-                }]} />
-              </View>
-              <Text style={[styles.confValue, { color: dirColor }]}>
-                {((latest.confidence ?? 0) * 100).toFixed(0)}%
-              </Text>
+        <Card style={styles.agentCard}>
+          {/* Header row */}
+          <View style={styles.agentHeader}>
+            <LinearGradient
+              colors={iconGradient}
+              style={styles.agentIconWrap}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            >
+              <Feather name={info.icon} size={18} color="#fff" />
+            </LinearGradient>
+
+            <View style={styles.agentInfo}>
+              <Text style={styles.agentName}>{info.name}</Text>
+              <Text style={styles.agentId}>{agentId.replace("_", " #")}</Text>
             </View>
-            {!!latest.underlying && (
-              <View style={styles.signalRow}>
-                <Text style={styles.signalLabel}>Underlying</Text>
-                <Text style={styles.signalValue}>{latest.underlying}</Text>
-              </View>
-            )}
-            {!!latest.timeframe && (
-              <View style={styles.signalRow}>
-                <Text style={styles.signalLabel}>Timeframe</Text>
-                <Text style={styles.signalValue}>{latest.timeframe}</Text>
-              </View>
-            )}
-            {!!latest.reasoning && (
-              <Text style={styles.reasoning} numberOfLines={3}>{latest.reasoning}</Text>
-            )}
-          </View>
-        )}
 
-        {lastActive && (
-          <View style={styles.lastActiveRow}>
-            <Feather name="clock" size={10} color={C.textTertiary} />
-            <Text style={styles.lastActive}>{formatTimeAgo(lastActive)}</Text>
+            <View style={styles.agentBadges}>
+              {direction ? (
+                <StatusBadge label={direction} variant={dirVariant} />
+              ) : (
+                <StatusBadge label="Idle" variant="inactive" />
+              )}
+              <View style={styles.dotContainer}>
+                <Animated.View
+                  style={[
+                    styles.activeDot,
+                    {
+                      backgroundColor: dirColor,
+                      shadowColor: dirColor,
+                    },
+                    dotStyle,
+                  ]}
+                />
+              </View>
+            </View>
           </View>
-        )}
-      </Card>
+
+          {/* Signal section */}
+          {latest && (
+            <View style={styles.latestSignal}>
+              {/* Confidence bar */}
+              <View style={styles.signalRow}>
+                <Text style={styles.signalLabel}>Confidence</Text>
+                <View style={styles.confBarOuter}>
+                  <Animated.View
+                    style={[
+                      styles.confBarInner,
+                      { backgroundColor: dirColor },
+                      barStyle,
+                    ]}
+                  />
+                </View>
+                <Text style={[styles.confValue, { color: dirColor }]}>
+                  {((latest.confidence ?? 0) * 100).toFixed(0)}%
+                </Text>
+              </View>
+
+              {!!latest.underlying && (
+                <View style={styles.signalRow}>
+                  <Text style={styles.signalLabel}>Underlying</Text>
+                  <Text style={styles.signalValue}>{latest.underlying}</Text>
+                </View>
+              )}
+
+              {!!latest.timeframe && (
+                <View style={styles.signalRow}>
+                  <Text style={styles.signalLabel}>Timeframe</Text>
+                  <Text style={styles.signalValue}>{latest.timeframe}</Text>
+                </View>
+              )}
+
+              {!!latest.reasoning && (
+                <Text style={styles.reasoning} numberOfLines={3}>
+                  {latest.reasoning}
+                </Text>
+              )}
+            </View>
+          )}
+
+          {/* Footer */}
+          {lastActive && (
+            <View style={styles.lastActiveRow}>
+              <Feather name="clock" size={10} color={C.textTertiary} />
+              <Text style={styles.lastActive}>{formatTimeAgo(lastActive)}</Text>
+            </View>
+          )}
+        </Card>
+      </View>
     </Animated.View>
   );
 }
@@ -248,30 +330,70 @@ function formatTimeAgo(ts: string): string {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
-  content: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 100 },
-  agentCard: { marginBottom: 10 },
-  staleCard: { opacity: 0.65 },
+  content: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 100, gap: 12 },
+  cardWrapper: {
+    borderRadius: 16,
+    overflow: "hidden",
+  },
+  glowOverlay: {
+    borderRadius: 16,
+    zIndex: 1,
+  },
+  agentCard: { marginBottom: 0 },
   agentHeader: { flexDirection: "row", alignItems: "center" },
   agentIconWrap: {
-    width: 38, height: 38, borderRadius: 12,
-    justifyContent: "center", alignItems: "center", marginRight: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
   },
   agentInfo: { flex: 1 },
   agentName: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: C.text },
-  agentId: { fontSize: 11, fontFamily: "Inter_400Regular", color: C.textTertiary },
+  agentId: { fontSize: 11, fontFamily: "Inter_400Regular", color: C.textTertiary, marginTop: 2 },
   agentBadges: { flexDirection: "row", alignItems: "center", gap: 8 },
-  activeDot: {
-    width: 8, height: 8, borderRadius: 4,
-    shadowOffset: { width: 0, height: 0 }, shadowOpacity: 1, shadowRadius: 6,
+  dotContainer: {
+    width: 14,
+    height: 14,
+    justifyContent: "center",
+    alignItems: "center",
   },
-  latestSignal: { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: C.separator },
+  activeDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 6,
+  },
+  latestSignal: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: C.separator,
+  },
   signalRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
   signalLabel: { fontSize: 12, fontFamily: "Inter_500Medium", color: C.textTertiary, width: 80 },
   signalValue: { fontSize: 12, fontFamily: "Inter_500Medium", color: C.text, flex: 1 },
-  confBarOuter: { flex: 1, height: 5, backgroundColor: C.elevated, borderRadius: 3, marginHorizontal: 10, overflow: "hidden" },
-  confBarInner: { height: 5, borderRadius: 3 },
+  confBarOuter: {
+    flex: 1,
+    height: 6,
+    backgroundColor: C.elevated,
+    borderRadius: 3,
+    marginHorizontal: 10,
+    overflow: "hidden",
+  },
+  confBarInner: { height: 6, borderRadius: 3 },
   confValue: { fontSize: 12, fontFamily: "Inter_700Bold", width: 36, textAlign: "right" },
-  reasoning: { fontSize: 12, fontFamily: "Inter_400Regular", color: C.textSecondary, lineHeight: 18, marginTop: 4 },
+  reasoning: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: C.textSecondary,
+    lineHeight: 18,
+    marginTop: 4,
+    fontStyle: "italic",
+  },
   lastActiveRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 10 },
   lastActive: { fontSize: 11, fontFamily: "Inter_400Regular", color: C.textTertiary },
 });

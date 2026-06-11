@@ -69,5 +69,8 @@ __pycache__/
 .venv/
 venv/
 *.pkl
+# Bootstrap-trained model ships with the deployment (DB snapshot takes
+# precedence once the daily retrainer runs in production)
+!backend/learning/models/latest.pkl
 *.apk
 server.log

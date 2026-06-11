@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -18,9 +19,16 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from config import NIFTY_LOT_SIZE, BANKNIFTY_LOT_SIZE
+
 logger = logging.getLogger("niftymind.learning.backtester")
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _lot_size(underlying: str) -> int:
+    return NIFTY_LOT_SIZE if underlying == "NIFTY" else BANKNIFTY_LOT_SIZE
 
 # Yahoo Finance symbols
 SYMBOLS = {
@@ -37,6 +45,7 @@ class HistoricalBacktester:
 
     def __init__(self, llm_config=None):
         self.llm_config = llm_config
+        self.last_trades: list[dict] = []  # raw trades from the most recent run
 
     async def run_backtest(
         self,
@@ -85,12 +94,19 @@ class HistoricalBacktester:
             if isinstance(intraday.columns, pd.MultiIndex):
                 intraday.columns = intraday.columns.get_level_values(0)
 
+            # Get 1-hour data (Yahoo allows ~730 days) — extends intraday
+            # coverage ~12x beyond what 5m alone can provide
+            hourly_start = end - timedelta(days=720)
+            hourly = yf.download(symbol, start=hourly_start, end=end, interval="1h", progress=False)
+            if isinstance(hourly.columns, pd.MultiIndex):
+                hourly.columns = hourly.columns.get_level_values(0)
+
             # Get VIX data
             vix_data = yf.download(VIX_SYMBOL, start=start, end=end, interval="1d", progress=False)
             if isinstance(vix_data.columns, pd.MultiIndex):
                 vix_data.columns = vix_data.columns.get_level_values(0)
 
-            logger.info(f"{underlying}: {len(daily)} daily bars, {len(intraday)} 5min bars")
+            logger.info(f"{underlying}: {len(daily)} daily, {len(hourly)} 1h, {len(intraday)} 5m bars")
 
             # Generate trades for each type
             if "BTST" in trade_types and len(daily) > 30:
@@ -101,7 +117,16 @@ class HistoricalBacktester:
             if "INTRADAY" in trade_types and len(intraday) > 100:
                 intra_trades = self._backtest_intraday(underlying, intraday, vix_data)
                 all_trades.extend(intra_trades)
-                logger.info(f"  INTRADAY: {len(intra_trades)} trades")
+                logger.info(f"  INTRADAY (5m): {len(intra_trades)} trades")
+
+            if "INTRADAY" in trade_types and len(hourly) > 50:
+                cutoff = intraday.index.min() if len(intraday) else None
+                hourly_window = hourly[hourly.index < cutoff] if cutoff is not None else hourly
+                intra_1h = self._backtest_intraday(
+                    underlying, hourly_window, vix_data, min_bars=5, tag="1h"
+                )
+                all_trades.extend(intra_1h)
+                logger.info(f"  INTRADAY (1h): {len(intra_1h)} trades")
 
             if "SCALP" in trade_types and len(intraday) > 100:
                 scalp_trades = self._backtest_scalp(underlying, intraday, vix_data)
@@ -109,6 +134,7 @@ class HistoricalBacktester:
                 logger.info(f"  SCALP: {len(scalp_trades)} trades")
 
         logger.info(f"Total backtested trades: {len(all_trades)}")
+        self.last_trades = all_trades
 
         # Store lessons
         if store_lessons and all_trades:
@@ -179,12 +205,13 @@ class HistoricalBacktester:
         tr = np.insert(tr, 0, h[0] - l[0])
         df["atr"] = pd.Series(tr).rolling(14).mean().values
 
-        # VWAP (for intraday)
+        # VWAP (for intraday) — index symbols often report zero volume
         if "Volume" in df.columns:
             vol = df["Volume"].values.astype(float)
             cum_vol = np.cumsum(vol)
             cum_vp = np.cumsum(((h + l + c) / 3) * vol)
-            df["vwap"] = np.where(cum_vol > 0, cum_vp / cum_vol, c)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                df["vwap"] = np.where(cum_vol > 0, cum_vp / cum_vol, c)
 
         # Bollinger Bands
         sma20 = pd.Series(c).rolling(20).mean()
@@ -349,8 +376,9 @@ class HistoricalBacktester:
             if consensus_score < 0.55:
                 continue  # Skip weak signals
 
-            # Only take BTST every few days to be realistic
-            if i % 3 != 0:
+            # Light thinning to reduce day-to-day autocorrelation while keeping
+            # ~50% more samples than the old every-3rd-day rule
+            if i % 2 != 0:
                 continue
 
             entry = float(row["Close"])
@@ -362,7 +390,7 @@ class HistoricalBacktester:
             pnl_per_unit = (next_close - entry) if direction == "BULLISH" else (entry - next_close)
 
             # Simulate 1 lot
-            lot_size = 50 if underlying == "NIFTY" else 15
+            lot_size = _lot_size(underlying)
             # Approximate option premium behavior (delta ~0.5 for ATM)
             option_pnl = pnl_per_unit * 0.55 * lot_size
 
@@ -401,9 +429,12 @@ class HistoricalBacktester:
 
         return trades
 
-    def _backtest_intraday(self, underlying: str, intraday: pd.DataFrame, vix_data: pd.DataFrame) -> list[dict]:
-        """Backtest intraday strategy on 5-min bars."""
+    def _backtest_intraday(self, underlying: str, intraday: pd.DataFrame, vix_data: pd.DataFrame,
+                           min_bars: int = 20, tag: str = "5m") -> list[dict]:
+        """Backtest intraday strategy on intraday bars (5m or 1h)."""
         trades = []
+        if intraday is None or len(intraday) == 0:
+            return trades
         df = self._compute_indicators(intraday)
         df = df.dropna()
 
@@ -415,92 +446,104 @@ class HistoricalBacktester:
 
         for date in dates:
             day_data = df[df.index.date == date]
-            if len(day_data) < 20:
+            if len(day_data) < min_bars:
                 continue
 
             vix = self._get_vix_for_date(vix_data, pd.Timestamp(date))
 
-            # Look for signal at 10:00-10:30 window (after initial volatility)
-            morning = day_data.between_time("04:30", "05:00")  # UTC (10:00-10:30 IST)
-            if morning.empty:
-                # Try broader window
-                morning = day_data.iloc[6:12]  # ~30-60 min after open
+            for bar_i, entry_bar in enumerate(self._entry_bars(day_data)):
+                prev_rows = [day_data.iloc[j].to_dict() for j in range(max(0, day_data.index.get_loc(entry_bar.name) - 5), day_data.index.get_loc(entry_bar.name))]
 
-            if len(morning) < 2:
-                continue
+                signals = self._simulate_agent_signals(entry_bar, prev_rows, underlying, vix)
+                consensus_score, direction = self._compute_consensus(signals, "INTRADAY")
 
-            entry_bar = morning.iloc[-1]
-            prev_rows = [day_data.iloc[j].to_dict() for j in range(max(0, day_data.index.get_loc(entry_bar.name) - 5), day_data.index.get_loc(entry_bar.name))]
+                # Training-data gate, looser than the live 0.65 threshold: the
+                # model needs LOSING low-consensus trades in the dataset to
+                # learn that consensus strength matters.
+                if consensus_score < 0.40:
+                    continue
 
-            signals = self._simulate_agent_signals(entry_bar, prev_rows, underlying, vix)
-            consensus_score, direction = self._compute_consensus(signals, "INTRADAY")
+                entry = float(entry_bar["Close"])
+                atr = float(entry_bar.get("atr", entry * 0.005))
 
-            if consensus_score < 0.50:
-                continue
+                # Find exit: look at remaining bars
+                entry_idx = day_data.index.get_loc(entry_bar.name)
+                remaining = day_data.iloc[entry_idx + 1:]
 
-            entry = float(entry_bar["Close"])
-            atr = float(entry_bar.get("atr", entry * 0.005))
+                if remaining.empty:
+                    continue
 
-            # Find exit: look at remaining bars
-            entry_idx = day_data.index.get_loc(entry_bar.name)
-            remaining = day_data.iloc[entry_idx + 1:]
+                # Simulate: T1 at 1.5 ATR, SL at 1.5 ATR
+                sl_dist = 1.5 * atr
+                t1_dist = 1.5 * sl_dist
 
-            if remaining.empty:
-                continue
+                exit_price = float(remaining.iloc[-1]["Close"])  # Default: EOD exit
+                exit_reason = "TIME_EXIT"
 
-            # Simulate: T1 at 1.5 ATR, SL at 1.5 ATR
-            sl_dist = 1.5 * atr
-            t1_dist = 1.5 * sl_dist
+                for _, bar in remaining.iterrows():
+                    high = float(bar["High"])
+                    low = float(bar["Low"])
 
-            exit_price = float(remaining.iloc[-1]["Close"])  # Default: EOD exit
-            exit_reason = "TIME_EXIT"
+                    if direction == "BULLISH":
+                        if low <= entry - sl_dist:
+                            exit_price = entry - sl_dist
+                            exit_reason = "STOP_LOSS"
+                            break
+                        if high >= entry + t1_dist:
+                            exit_price = entry + t1_dist
+                            exit_reason = "TARGET"
+                            break
+                    else:
+                        if high >= entry + sl_dist:
+                            exit_price = entry + sl_dist
+                            exit_reason = "STOP_LOSS"
+                            break
+                        if low <= entry - t1_dist:
+                            exit_price = entry - t1_dist
+                            exit_reason = "TARGET"
+                            break
 
-            for _, bar in remaining.iterrows():
-                high = float(bar["High"])
-                low = float(bar["Low"])
+                pnl_per_unit = (exit_price - entry) if direction == "BULLISH" else (entry - exit_price)
+                lot_size = _lot_size(underlying)
+                option_pnl = pnl_per_unit * 0.50 * lot_size
 
-                if direction == "BULLISH":
-                    if low <= entry - sl_dist:
-                        exit_price = entry - sl_dist
-                        exit_reason = "STOP_LOSS"
-                        break
-                    if high >= entry + t1_dist:
-                        exit_price = entry + t1_dist
-                        exit_reason = "TARGET"
-                        break
-                else:
-                    if high >= entry + sl_dist:
-                        exit_price = entry + sl_dist
-                        exit_reason = "STOP_LOSS"
-                        break
-                    if low <= entry - t1_dist:
-                        exit_price = entry - t1_dist
-                        exit_reason = "TARGET"
-                        break
-
-            pnl_per_unit = (exit_price - entry) if direction == "BULLISH" else (entry - exit_price)
-            lot_size = 50 if underlying == "NIFTY" else 15
-            option_pnl = pnl_per_unit * 0.50 * lot_size
-
-            trade = {
-                "trade_id": f"BT_INTRA_{underlying}_{date.strftime('%Y%m%d')}",
-                "underlying": underlying,
-                "direction": direction,
-                "trade_type": "INTRADAY",
-                "entry_price": round(entry, 2),
-                "exit_price": round(exit_price, 2),
-                "pnl": round(option_pnl, 2),
-                "consensus_score": round(consensus_score, 3),
-                "entry_time": entry_bar.name.isoformat(),
-                "exit_time": remaining.iloc[-1].name.isoformat() if exit_reason == "TIME_EXIT" else entry_bar.name.isoformat(),
-                "exit_reason": exit_reason,
-                "vix_at_entry": round(vix, 1),
-                "market_regime": self._get_vix_regime(vix),
-                "signals": signals,
-            }
-            trades.append(trade)
+                trade = {
+                    "trade_id": f"BT_INTRA{tag.upper()}_{underlying}_{date.strftime('%Y%m%d')}_{bar_i}",
+                    "underlying": underlying,
+                    "direction": direction,
+                    "trade_type": "INTRADAY",
+                    "entry_price": round(entry, 2),
+                    "exit_price": round(exit_price, 2),
+                    "pnl": round(option_pnl, 2),
+                    "consensus_score": round(consensus_score, 3),
+                    "entry_time": entry_bar.name.isoformat(),
+                    "exit_time": remaining.iloc[-1].name.isoformat() if exit_reason == "TIME_EXIT" else entry_bar.name.isoformat(),
+                    "exit_reason": exit_reason,
+                    "vix_at_entry": round(vix, 1),
+                    "market_regime": self._get_vix_regime(vix),
+                    "signals": signals,
+                }
+                trades.append(trade)
 
         return trades
+
+    def _entry_bars(self, day_data: pd.DataFrame, max_entries: int = 2) -> list:
+        """Candidate entry bars for a day: post-open settle (~10:00-10:30 IST)
+        and an early-afternoon bar (~60% through the session)."""
+        bars = []
+        morning = day_data.between_time("04:30", "05:00")  # UTC timestamps
+        if morning.empty:
+            morning = day_data.between_time("10:00", "10:30")  # IST timestamps
+        if morning.empty:
+            morning = day_data.iloc[6:12] if len(day_data) >= 20 else day_data.iloc[1:3]
+        if len(morning) >= 1:
+            bars.append(morning.iloc[-1])
+
+        if max_entries > 1 and len(day_data) >= 5:
+            afternoon_bar = day_data.iloc[int(len(day_data) * 0.6)]
+            if not bars or afternoon_bar.name != bars[0].name:
+                bars.append(afternoon_bar)
+        return bars
 
     def _backtest_scalp(self, underlying: str, intraday: pd.DataFrame, vix_data: pd.DataFrame) -> list[dict]:
         """Backtest scalp strategy on 5-min bars (quick entries/exits)."""
@@ -533,7 +576,9 @@ class HistoricalBacktester:
                 signals = self._simulate_agent_signals(entry_bar, prev_rows, underlying, vix)
                 consensus_score, direction = self._compute_consensus(signals, "SCALP")
 
-                if consensus_score < 0.45:
+                # Looser than live threshold — losing weak-consensus scalps are
+                # valuable training signal
+                if consensus_score < 0.35:
                     continue
 
                 entry = float(entry_bar["Close"])
@@ -572,7 +617,7 @@ class HistoricalBacktester:
                             break
 
                 pnl_per_unit = (exit_price - entry) if direction == "BULLISH" else (entry - exit_price)
-                lot_size = 50 if underlying == "NIFTY" else 15
+                lot_size = _lot_size(underlying)
                 option_pnl = pnl_per_unit * 0.45 * lot_size
 
                 trade = {

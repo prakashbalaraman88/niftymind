@@ -51,7 +51,27 @@ AGENT_ID_MAP = {
     "agent_7_macro": 7,
 }
 
+AGENT_NUM_TO_ID = {f"agent_{n}": aid for aid, n in AGENT_ID_MAP.items()}
+
 MIN_TRAINING_SAMPLES = 50
+
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
+MODEL_FILE = os.path.join(MODEL_DIR, "latest.pkl")
+
+MODEL_SNAPSHOTS_DDL = """
+CREATE TABLE IF NOT EXISTS model_snapshots (
+    id SERIAL PRIMARY KEY,
+    model_version INTEGER NOT NULL,
+    training_trades INTEGER,
+    accuracy DOUBLE PRECISION,
+    precision_val DOUBLE PRECISION,
+    recall_val DOUBLE PRECISION,
+    f1_score DOUBLE PRECISION,
+    feature_importances JSONB,
+    model_blob BYTEA,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+)
+"""
 
 
 class TradeOutcomeModel:
@@ -64,7 +84,12 @@ class TradeOutcomeModel:
         self._is_loaded = False
 
     def load_latest(self) -> bool:
-        """Load the latest model from Supabase."""
+        """Load the latest model: Supabase first, local file fallback."""
+        if self._load_from_db():
+            return True
+        return self._load_from_file()
+
+    def _load_from_db(self) -> bool:
         import psycopg2
 
         try:
@@ -85,22 +110,64 @@ class TradeOutcomeModel:
                 self._scaler = data.get("scaler")
                 self._model_version = row[0]
                 self._is_loaded = True
-                logger.info(f"Loaded model v{self._model_version}")
+                logger.info(f"Loaded model v{self._model_version} from DB")
                 return True
-            else:
-                logger.info("No model snapshot found. Will return default predictions.")
-                return False
+            logger.info("No model snapshot in DB.")
+            return False
         except Exception as e:
-            logger.error(f"Failed to load model: {e}")
+            logger.error(f"Failed to load model from DB: {e}")
             return False
 
-    def predict(self, supporting_data: dict) -> float:
-        """Predict win probability. Returns 0.5 if no model loaded."""
+    def _load_from_file(self) -> bool:
+        try:
+            if not os.path.exists(MODEL_FILE):
+                logger.info("No local model file. Will return default predictions.")
+                return False
+            with open(MODEL_FILE, "rb") as f:
+                data = pickle.load(f)
+            self._model = data["model"]
+            self._scaler = data.get("scaler")
+            self._model_version = int(data.get("version", 1))
+            self._is_loaded = True
+            logger.info(f"Loaded model v{self._model_version} from local file")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load model from file: {e}")
+            return False
+
+    def predict(self, proposal: dict) -> float:
+        """Predict win probability for a trade proposal. Returns 0.5 if no model.
+
+        Accepts either the full consensus proposal (preferred — has underlying,
+        direction and the votes list) or a bare supporting_data dict.
+        """
         if not self._is_loaded or self._model is None:
             return 0.5
 
         try:
-            features = self._extract_features(supporting_data)
+            supporting = proposal.get("supporting_data", proposal)
+            votes = supporting.get("votes") or []
+            if not votes and supporting.get("agent_votes"):
+                # Legacy dict format {"agent_1": {...}}
+                votes = [
+                    {"agent_id": AGENT_NUM_TO_ID.get(k, k), **v}
+                    for k, v in supporting["agent_votes"].items()
+                ]
+
+            trade_like = {
+                "vix_at_entry": supporting.get("vix_at_entry", 15),
+                "consensus_score": supporting.get("consensus_score",
+                                                  proposal.get("confidence", 0.5)),
+                "trade_type": supporting.get("trade_type",
+                                             proposal.get("timeframe", "INTRADAY")),
+                "underlying": proposal.get("underlying",
+                                           supporting.get("underlying", "")),
+                "direction": proposal.get("direction",
+                                          supporting.get("direction", "BULLISH")),
+                "entry_time": datetime.now().isoformat(),
+                "votes": votes,
+            }
+            features = self._extract_features_from_trade(trade_like)
             X = np.array([features])
             if self._scaler:
                 X = self._scaler.transform(X)
@@ -114,9 +181,8 @@ class TradeOutcomeModel:
     def train(self, trades_with_votes: list[dict]) -> dict | None:
         """Train on accumulated trade data. Returns metrics or None if insufficient data."""
         from sklearn.ensemble import GradientBoostingClassifier
-        from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import StandardScaler
-        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
         if len(trades_with_votes) < MIN_TRAINING_SAMPLES:
             logger.info(
@@ -125,44 +191,72 @@ class TradeOutcomeModel:
             )
             return None
 
-        # Build feature matrix
-        X_rows = []
-        y = []
-        for trade in trades_with_votes:
-            features = self._extract_features_from_trade(trade)
-            X_rows.append(features)
-            y.append(1 if float(trade.get("pnl", 0)) > 0 else 0)
+        # Per-type chronological split: within each trade type the holdout is
+        # strictly in the future of its training window (no lookahead leakage),
+        # while the train/test TYPE mix stays comparable — different types have
+        # very different history depths (BTST: years of daily bars; SCALP: ~60
+        # days of 5m bars), so a single global time cut would make the test set
+        # all-recent-intraday and measure distribution shift, not skill.
+        def _entry_key(t):
+            return str(t.get("entry_time") or "")
 
-        X = np.array(X_rows)
-        y = np.array(y)
+        by_type: dict[str, list[dict]] = {}
+        for t in trades_with_votes:
+            by_type.setdefault(t.get("trade_type", "INTRADAY"), []).append(t)
 
-        # Split
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y if sum(y) > 5 else None,
-        )
+        train_trades: list[dict] = []
+        test_trades: list[dict] = []
+        for tt_trades in by_type.values():
+            tt_sorted = sorted(tt_trades, key=_entry_key)
+            cut = max(1, int(len(tt_sorted) * 0.8))
+            train_trades.extend(tt_sorted[:cut])
+            test_trades.extend(tt_sorted[cut:])
+
+        def _features_and_labels(trades):
+            X_rows, labels = [], []
+            for trade in trades:
+                X_rows.append(self._extract_features_from_trade(trade))
+                labels.append(1 if float(trade.get("pnl", 0)) > 0 else 0)
+            return np.array(X_rows), np.array(labels)
+
+        X_train, y_train = _features_and_labels(train_trades)
+        X_test, y_test = _features_and_labels(test_trades)
+        if len(X_test) == 0 or len(set(y_train.tolist())) < 2:
+            logger.info("Not enough class diversity for training. Skipping.")
+            return None
 
         # Scale
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
 
-        # Train
+        # Train — conservative settings: shallow trees, subsampling and a low
+        # learning rate generalize better on noisy market data than the
+        # previous deeper/faster configuration.
         model = GradientBoostingClassifier(
-            n_estimators=100,
-            max_depth=3,
-            min_samples_leaf=10,
-            learning_rate=0.1,
+            n_estimators=200,
+            max_depth=2,
+            min_samples_leaf=20,
+            learning_rate=0.05,
+            subsample=0.8,
             random_state=42,
         )
         model.fit(X_train_scaled, y_train)
 
         # Evaluate
         y_pred = model.predict(X_test_scaled)
+        try:
+            auc = float(roc_auc_score(y_test, model.predict_proba(X_test_scaled)[:, 1]))
+        except Exception:
+            auc = 0.5
         metrics = {
             "accuracy": float(accuracy_score(y_test, y_pred)),
             "precision": float(precision_score(y_test, y_pred, zero_division=0)),
             "recall": float(recall_score(y_test, y_pred, zero_division=0)),
             "f1": float(f1_score(y_test, y_pred, zero_division=0)),
+            "auc": auc,
+            "baseline_win_rate": float(np.mean(y_test)),
+            "test_trades": int(len(y_test)),
             "training_trades": len(trades_with_votes),
             "feature_importances": {
                 name: float(imp)
@@ -188,14 +282,30 @@ class TradeOutcomeModel:
         return metrics
 
     def _save_snapshot(self, metrics: dict):
-        """Save model to Supabase model_snapshots table."""
+        """Persist the model: local file always, Supabase when reachable."""
         import json
         import psycopg2
 
+        blob = pickle.dumps({"model": self._model, "scaler": self._scaler})
+
+        # Local file — survives DB outages, used as load fallback
         try:
-            blob = pickle.dumps({"model": self._model, "scaler": self._scaler})
+            os.makedirs(MODEL_DIR, exist_ok=True)
+            with open(MODEL_FILE, "wb") as f:
+                pickle.dump(
+                    {"model": self._model, "scaler": self._scaler,
+                     "version": self._model_version, "metrics": metrics,
+                     "saved_at": datetime.now().isoformat()},
+                    f,
+                )
+            logger.info(f"Model v{self._model_version} saved to {MODEL_FILE}")
+        except Exception as e:
+            logger.error(f"Failed to save model file: {e}")
+
+        try:
             conn = psycopg2.connect(os.getenv("DATABASE_URL", ""))
             cur = conn.cursor()
+            cur.execute(MODEL_SNAPSHOTS_DDL)
             cur.execute(
                 """INSERT INTO model_snapshots
                    (model_version, training_trades, accuracy, precision_val,
@@ -214,8 +324,9 @@ class TradeOutcomeModel:
             )
             conn.commit()
             conn.close()
+            logger.info(f"Model v{self._model_version} snapshot saved to DB")
         except Exception as e:
-            logger.error(f"Failed to save model snapshot: {e}")
+            logger.error(f"Failed to save model snapshot to DB: {e}")
 
     def _extract_features(self, supporting_data: dict) -> list[float]:
         """Extract features from a trade proposal's supporting_data."""

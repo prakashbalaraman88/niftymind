@@ -58,7 +58,33 @@ class TradeJournal:
         return None
 
     def get_closed_trades(self) -> list[dict]:
-        return [t for t in self._trades if t["status"] == "CLOSED"]
+        """Read closed trades from database (source of truth)."""
+        import os, psycopg2
+        url = os.getenv("DATABASE_URL", "")
+        if not url:
+            return [t for t in self._trades if t["status"] == "CLOSED"]
+        try:
+            conn = psycopg2.connect(url, connect_timeout=5)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT trade_id, pnl, entry_time, exit_time, direction, underlying, "
+                "quantity, trade_type, consensus_score, exit_reason "
+                "FROM trades WHERE status = 'CLOSED' AND pnl IS NOT NULL ORDER BY exit_time DESC"
+            )
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchall()
+            conn.close()
+            trades = []
+            for row in rows:
+                t = dict(zip(cols, row))
+                for k, v in t.items():
+                    if hasattr(v, 'isoformat'):
+                        t[k] = v.isoformat()
+                trades.append(t)
+            return trades
+        except Exception as e:
+            logger.warning(f"TradeJournal DB read failed: {e}")
+            return [t for t in self._trades if t["status"] == "CLOSED"]
 
     def _save_trade(self, trade: dict):
         """Save trade to daily journal file."""

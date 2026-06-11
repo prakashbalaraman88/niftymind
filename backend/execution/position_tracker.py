@@ -98,7 +98,9 @@ class PositionTracker:
             broker_manages_sl_target = (executor == "kite" and variety == "bo")
 
             is_long = direction.upper() in ("BULLISH", "LONG", "BUY")
-            is_options = entry_price < 1000  # Options premiums are typically under ₹1000
+            # Prefer the explicit flag from the executor; fall back to the
+            # premium-magnitude heuristic for events that predate it.
+            is_options = bool(data.get("is_options", entry_price < 1000))
 
             if not sl_price:
                 sl_pct = 0.30 if is_options else 0.02  # 30% SL on premium, 2% on index
@@ -128,10 +130,14 @@ class PositionTracker:
                 "peak_pnl": 0.0,
                 "trough_pnl": 0.0,
                 "is_options": is_options,
+                "delta": float(data.get("delta", 0.5) or 0.5),
+                "entry_index_price": float(data.get("entry_index_price", 0) or 0),
             }
             logger.info(f"Tracking position: {trade_id} SL={sl_price:.2f} Target={target_price:.2f} broker_managed={broker_manages_sl_target}")
 
-        elif event in ("EXIT", "SL_HIT", "TARGET_HIT", "EOD_CLOSE", "MANUAL", "BRACKET_EXIT"):
+        elif event in ("EXIT", "SL_HIT", "TARGET_HIT", "EOD_CLOSE", "MANUAL", "BRACKET_EXIT",
+                       "FULL_EXIT_SL", "FULL_EXIT_ILLIQUID", "TIME_EXIT", "EOD_EXIT",
+                       "MANUAL_CLOSE", "MANUAL_TEST") or event.startswith("PARTIAL_EXIT"):
             if trade_id in self._positions:
                 del self._positions[trade_id]
             self._broker_managed_exits.discard(trade_id)
@@ -146,14 +152,34 @@ class PositionTracker:
             except Exception as e:
                 logger.error(f"Monitor loop error: {e}", exc_info=True)
 
+    def _position_value(self, pos: dict) -> float | None:
+        """Current price in the position's own scale (premium estimate for options)."""
+        underlying_price = self._latest_prices.get(pos["underlying"])
+        if not pos.get("is_options", False):
+            return underlying_price
+        entry_index = pos.get("entry_index_price", 0)
+        if underlying_price is None or entry_index <= 0:
+            return None
+        index_move = underlying_price - entry_index
+        if pos["direction"].upper() not in ("BULLISH", "LONG", "BUY"):
+            index_move = -index_move  # PE gains when index falls
+        delta = pos.get("delta", 0.5) or 0.5
+        return max(0.05, pos["entry_price"] + index_move * delta)
+
+    def _unrealized(self, pos: dict, current_value: float) -> float:
+        """Unrealized P&L. Options are long premium in both directions."""
+        is_long = pos["direction"].upper() in ("BULLISH", "LONG", "BUY")
+        if pos.get("is_options", False) or is_long:
+            return (current_value - pos["entry_price"]) * pos["quantity"]
+        return (pos["entry_price"] - current_value) * pos["quantity"]
+
     async def _check_exit_conditions(self):
         now = datetime.now(IST)
         current_time = now.time()
         positions_to_exit = []
 
         for trade_id, pos in list(self._positions.items()):
-            underlying = pos["underlying"]
-            current_price = self._latest_prices.get(underlying)
+            current_price = self._position_value(pos)
             direction = pos["direction"]
             entry_price = pos["entry_price"]
             sl_price = pos["sl_price"]
@@ -163,11 +189,7 @@ class PositionTracker:
 
             if trade_type in ("SCALP", "INTRADAY") and current_time >= EOD_SQUARE_OFF:
                 fallback_price = current_price if current_price is not None else entry_price
-                unrealized = 0.0
-                if direction.upper() in ("BULLISH", "LONG", "BUY"):
-                    unrealized = (fallback_price - entry_price) * pos["quantity"]
-                else:
-                    unrealized = (entry_price - fallback_price) * pos["quantity"]
+                unrealized = self._unrealized(pos, fallback_price)
                 positions_to_exit.append((trade_id, "EOD_CLOSE", fallback_price, unrealized))
                 continue
 
@@ -177,10 +199,7 @@ class PositionTracker:
             is_long = direction.upper() in ("BULLISH", "LONG", "BUY")
             is_options_pos = pos.get("is_options", False)
 
-            if is_long:
-                unrealized = (current_price - entry_price) * pos["quantity"]
-            else:
-                unrealized = (entry_price - current_price) * pos["quantity"]
+            unrealized = self._unrealized(pos, current_price)
 
             pos["peak_pnl"] = max(pos["peak_pnl"], unrealized)
             pos["trough_pnl"] = min(pos["trough_pnl"], unrealized)
@@ -258,16 +277,14 @@ class PositionTracker:
     def get_tracked_positions(self) -> list[dict]:
         result = []
         for pos in self._positions.values():
-            underlying = pos["underlying"]
-            current_price = self._latest_prices.get(underlying, pos["entry_price"])
-            if pos["direction"].upper() in ("BULLISH", "LONG", "BUY"):
-                unrealized = round((current_price - pos["entry_price"]) * pos["quantity"], 2)
-            else:
-                unrealized = round((pos["entry_price"] - current_price) * pos["quantity"], 2)
+            current_price = self._position_value(pos)
+            if current_price is None:
+                current_price = pos["entry_price"]
+            unrealized = round(self._unrealized(pos, current_price), 2)
 
             result.append({
                 **pos,
-                "current_price": current_price,
+                "current_price": round(current_price, 2),
                 "unrealized_pnl": unrealized,
             })
         return result

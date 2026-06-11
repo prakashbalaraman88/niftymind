@@ -10,8 +10,15 @@ import {
   Switch,
   ActivityIndicator,
   Modal,
-  Animated,
 } from "react-native";
+import Animated, {
+  FadeIn,
+  FadeInDown,
+  ZoomIn,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from "react-native-reanimated";
 import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -36,7 +43,6 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const { connected, subscribe } = useWebSocket();
-  const pageOpacity = useRef(new Animated.Value(0)).current;
 
   const { user, signOut } = useAuth();
 
@@ -55,10 +61,6 @@ export default function SettingsScreen() {
   });
 
   useEffect(() => {
-    Animated.timing(pageOpacity, { toValue: 1, duration: 500, useNativeDriver: true }).start();
-  }, []);
-
-  useEffect(() => {
     const unsub = subscribe("trade_execution", () => {
       queryClient.invalidateQueries({ queryKey: ["settings"] });
     });
@@ -72,19 +74,35 @@ export default function SettingsScreen() {
   const [selectedInstruments, setSelectedInstruments] = useState<string[]>(["NIFTY", "BANKNIFTY"]);
   const [showPinModal, setShowPinModal] = useState(false);
   const [pin, setPin] = useState("");
+  const [pinFocused, setPinFocused] = useState(false);
+  const [capitalFocused, setCapitalFocused] = useState(false);
+  const [maxDailyLossFocused, setMaxDailyLossFocused] = useState(false);
+
+  const editingRef = useRef(false);
+  editingRef.current = capitalFocused || maxDailyLossFocused;
+  const savingRef = useRef(false);
 
   useEffect(() => {
-    if (settings) {
-      setCapital(String(settings.capital));
-      setMaxDailyLoss(String(settings.max_daily_loss));
-      setMaxTradeRisk(settings.max_trade_risk_pct);
-      setMaxPositions(settings.max_open_positions);
-      if (settings.instruments?.length) setSelectedInstruments(settings.instruments);
-    }
+    if (!settings) return;
+    // Don't clobber in-progress edits: background refetches (60s poll, WS
+    // invalidations) must not reset fields while the user is typing or a
+    // save is still round-tripping.
+    if (editingRef.current || savingRef.current) return;
+    setCapital(String(settings.capital));
+    setMaxDailyLoss(String(settings.max_daily_loss));
+    setMaxTradeRisk(settings.max_trade_risk_pct);
+    setMaxPositions(settings.max_open_positions);
+    if (settings.instruments?.length) setSelectedInstruments(settings.instruments);
   }, [settings]);
 
   const mutation = useMutation({
-    mutationFn: (data: Record<string, unknown>) => api.updateSettings(data),
+    mutationFn: (data: Record<string, unknown>) => {
+      savingRef.current = true;
+      return api.updateSettings(data);
+    },
+    onSettled: () => {
+      savingRef.current = false;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
@@ -137,15 +155,14 @@ export default function SettingsScreen() {
     if (maxTradeRisk !== settings?.max_trade_risk_pct) updates.max_trade_risk_pct = maxTradeRisk;
     if (maxPositions !== settings?.max_open_positions) updates.max_open_positions = maxPositions;
     if (Object.keys(updates).length === 0) { Alert.alert("No Changes", "Nothing to update."); return; }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     mutation.mutate(updates);
   };
 
   const handleZerodhaLogin = async () => {
     try {
       const { login_url } = await api.getZerodhaLoginUrl();
-      // Open Zerodha login in browser; callback redirects via deep link
       await WebBrowser.openBrowserAsync(login_url);
-      // Refetch status after returning from browser
       setTimeout(() => refetchZerodha(), 2000);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to open Zerodha login";
@@ -174,225 +191,265 @@ export default function SettingsScreen() {
 
   return (
     <>
-      <Animated.View style={[{ flex: 1 }, { opacity: pageOpacity }]}>
+      <Animated.View entering={FadeIn.duration(400)} style={{ flex: 1 }}>
         <ScrollView
           style={styles.container}
           contentContainerStyle={{ paddingTop: 12, paddingBottom: insets.bottom + 100 }}
           keyboardDismissMode="on-drag"
         >
-          <Card style={styles.modeCard}>
-            <LinearGradient
-              colors={isLive ? ["rgba(255,59,92,0.12)", "transparent"] : ["rgba(124,58,237,0.08)", "transparent"]}
-              style={StyleSheet.absoluteFill}
-              pointerEvents="none"
-            />
-            <View style={styles.modeHeader}>
-              <View style={styles.modeInfo}>
-                <View style={[styles.modeIconWrap, { backgroundColor: isLive ? C.redDark : C.accentLight }]}>
-                  <Feather name={isLive ? "zap" : "shield"} size={16} color={isLive ? C.red : C.accentBright} />
-                </View>
-                <View>
-                  <Text style={styles.modeTitle}>Trading Mode</Text>
-                  <StatusBadge label={isLive ? "LIVE" : "PAPER"} variant={isLive ? "live" : "paper"} size="medium" />
-                </View>
-              </View>
-              <Switch
-                value={!!isLive}
-                onValueChange={handleModeToggle}
-                trackColor={{ false: C.elevated, true: C.red }}
-                thumbColor={isLive ? C.red : C.textSecondary}
-                ios_backgroundColor={C.elevated}
+          {/* Mode Card */}
+          <Animated.View entering={FadeInDown.delay(0).springify()}>
+            <Card style={[
+              styles.modeCard,
+              isLive ? { borderColor: "rgba(255,59,92,0.3)" } : null,
+            ] as any}>
+              <LinearGradient
+                colors={isLive ? ["rgba(255,59,92,0.12)", "transparent"] : ["rgba(124,58,237,0.08)", "transparent"]}
+                style={StyleSheet.absoluteFill}
+                pointerEvents="none"
               />
-            </View>
-            <Text style={styles.modeSubtitle}>
-              {isLive
-                ? "Real orders via Zerodha Kite. Be cautious."
-                : "Trades are simulated. No real money at risk."}
-            </Text>
-          </Card>
-
-          <Card style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Instruments</Text>
-            <Text style={styles.sectionSubtitle}>Select which indices to trade</Text>
-            <View style={styles.instrumentRow}>
-              {INSTRUMENTS.map((inst) => {
-                const isSelected = selectedInstruments.includes(inst);
-                return (
-                  <Pressable key={inst} onPress={() => toggleInstrument(inst)} style={{ flex: 1 }}>
-                    {isSelected ? (
-                      <LinearGradient
-                        colors={C.gradient.accent}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={styles.instrumentChipActive}
-                      >
-                        <Feather name="check-circle" size={15} color="#fff" />
-                        <Text style={styles.instrumentTextActive}>{inst}</Text>
-                      </LinearGradient>
-                    ) : (
-                      <View style={styles.instrumentChip}>
-                        <Feather name="circle" size={15} color={C.textTertiary} />
-                        <Text style={styles.instrumentText}>{inst}</Text>
-                      </View>
-                    )}
-                  </Pressable>
-                );
-              })}
-            </View>
-          </Card>
-
-          <Card style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Connection</Text>
-            <View style={styles.settingRow}>
-              <View style={[styles.settingIcon, { backgroundColor: connected ? C.greenDark : C.redDark }]}>
-                <Feather name="wifi" size={13} color={connected ? C.green : C.red} />
-              </View>
-              <Text style={styles.settingLabel}>WebSocket</Text>
-              <Text style={[styles.settingValue, { color: connected ? C.green : C.red }]}>
-                {connected ? "Connected" : "Disconnected"}
-              </Text>
-            </View>
-          </Card>
-
-          {/* Zerodha Broker Connection */}
-          <Card style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Zerodha Broker</Text>
-            <Text style={styles.sectionSubtitle}>
-              Connect your Zerodha account for live trading
-            </Text>
-            <View style={styles.settingRow}>
-              <View
-                style={[
-                  styles.settingIcon,
-                  {
-                    backgroundColor: zerodhaStatus?.authenticated
-                      ? C.greenDark
-                      : C.redDark,
-                  },
-                ]}
-              >
-                <Feather
-                  name={zerodhaStatus?.authenticated ? "check-circle" : "link"}
-                  size={13}
-                  color={zerodhaStatus?.authenticated ? C.green : C.red}
+              <View style={styles.modeHeader}>
+                <View style={styles.modeInfo}>
+                  <LinearGradient
+                    colors={isLive ? ["rgba(255,59,92,0.3)", "rgba(255,59,92,0.1)"] : ["rgba(124,58,237,0.3)", "rgba(124,58,237,0.1)"]}
+                    style={styles.modeIconWrap}
+                  >
+                    <Feather name={isLive ? "zap" : "shield"} size={16} color={isLive ? C.red : C.accentBright} />
+                  </LinearGradient>
+                  <View>
+                    <Text style={styles.modeTitle}>Trading Mode</Text>
+                    <StatusBadge label={isLive ? "LIVE" : "PAPER"} variant={isLive ? "live" : "paper"} size="medium" />
+                  </View>
+                </View>
+                <Switch
+                  value={!!isLive}
+                  onValueChange={handleModeToggle}
+                  trackColor={{ false: C.elevated, true: C.red }}
+                  thumbColor={isLive ? C.red : C.textSecondary}
+                  ios_backgroundColor={C.elevated}
                 />
               </View>
-              <Text style={styles.settingLabel}>
-                {zerodhaStatus?.authenticated
-                  ? `${zerodhaStatus.user_name ?? zerodhaStatus.user_id}`
-                  : "Not connected"}
+              <Text style={styles.modeSubtitle}>
+                {isLive
+                  ? "Real orders via Zerodha Kite. Be cautious."
+                  : "Trades are simulated. No real money at risk."}
               </Text>
-              {zerodhaStatus?.authenticated ? (
-                <StatusBadge label="ACTIVE" variant="live" size="medium" />
-              ) : (
-                <Pressable onPress={handleZerodhaLogin}>
+            </Card>
+          </Animated.View>
+
+          {/* Instruments */}
+          <Animated.View entering={FadeInDown.delay(80).springify()}>
+            <Card style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Instruments</Text>
+              <Text style={styles.sectionSubtitle}>Select which indices to trade</Text>
+              <View style={styles.instrumentRow}>
+                {INSTRUMENTS.map((inst) => {
+                  const isSelected = selectedInstruments.includes(inst);
+                  return (
+                    <Pressable key={inst} onPress={() => toggleInstrument(inst)} style={{ flex: 1 }}>
+                      {isSelected ? (
+                        <LinearGradient
+                          colors={C.gradient.accent}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                          style={styles.instrumentChipActive}
+                        >
+                          <Feather name="check-circle" size={15} color="#fff" />
+                          <Text style={styles.instrumentTextActive}>{inst}</Text>
+                        </LinearGradient>
+                      ) : (
+                        <View style={styles.instrumentChip}>
+                          <Feather name="circle" size={15} color={C.textTertiary} />
+                          <Text style={styles.instrumentText}>{inst}</Text>
+                        </View>
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </Card>
+          </Animated.View>
+
+          {/* Connection */}
+          <Animated.View entering={FadeInDown.delay(160).springify()}>
+            <Card style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Connection</Text>
+              <View style={styles.settingRow}>
+                <View style={[styles.settingIcon, { backgroundColor: connected ? C.greenDark : C.redDark }]}>
+                  <Feather name="wifi" size={13} color={connected ? C.green : C.red} />
+                </View>
+                <Text style={styles.settingLabel}>WebSocket</Text>
+                <Text style={[styles.settingValue, { color: connected ? C.green : C.red }]}>
+                  {connected ? "Connected" : "Disconnected"}
+                </Text>
+              </View>
+            </Card>
+          </Animated.View>
+
+          {/* Zerodha Broker */}
+          <Animated.View entering={FadeInDown.delay(240).springify()}>
+            <Card style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Zerodha Broker</Text>
+              <Text style={styles.sectionSubtitle}>
+                Connect your Zerodha account for live trading
+              </Text>
+              <View style={styles.settingRow}>
+                <View
+                  style={[
+                    styles.settingIcon,
+                    {
+                      backgroundColor: zerodhaStatus?.authenticated
+                        ? C.greenDark
+                        : C.redDark,
+                    },
+                  ]}
+                >
+                  <Feather
+                    name={zerodhaStatus?.authenticated ? "check-circle" : "link"}
+                    size={13}
+                    color={zerodhaStatus?.authenticated ? C.green : C.red}
+                  />
+                </View>
+                <Text style={styles.settingLabel}>
+                  {zerodhaStatus?.authenticated
+                    ? `${zerodhaStatus.user_name ?? zerodhaStatus.user_id}`
+                    : "Not connected"}
+                </Text>
+                {zerodhaStatus?.authenticated ? (
+                  <StatusBadge label="ACTIVE" variant="live" size="medium" />
+                ) : (
+                  <Pressable onPress={handleZerodhaLogin}>
+                    <LinearGradient
+                      colors={C.gradient.accent}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.connectBtn}
+                    >
+                      <Text style={styles.connectBtnText}>Connect</Text>
+                    </LinearGradient>
+                  </Pressable>
+                )}
+              </View>
+              {zerodhaStatus?.authenticated && (
+                <Text style={styles.zerodhaNote}>
+                  Token expires daily at 6:00 AM. Re-login required each trading day.
+                </Text>
+              )}
+            </Card>
+          </Animated.View>
+
+          {/* Capital & Risk */}
+          <Animated.View entering={FadeInDown.delay(320).springify()}>
+            <Card style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Capital & Risk</Text>
+
+              <DarkInput
+                label="Capital"
+                prefix="₹"
+                value={capital}
+                onChangeText={setCapital}
+                keyboardType="numeric"
+                focused={capitalFocused}
+                onFocus={() => setCapitalFocused(true)}
+                onBlur={() => setCapitalFocused(false)}
+              />
+              <DarkInput
+                label="Max Daily Loss"
+                prefix="₹"
+                value={maxDailyLoss}
+                onChangeText={setMaxDailyLoss}
+                keyboardType="numeric"
+                focused={maxDailyLossFocused}
+                onFocus={() => setMaxDailyLossFocused(true)}
+                onBlur={() => setMaxDailyLossFocused(false)}
+              />
+
+              <View style={styles.sliderRow}>
+                <View style={styles.sliderHeader}>
+                  <Text style={styles.inputLabel}>Max Trade Risk</Text>
+                  <Text style={styles.sliderValue}>{maxTradeRisk.toFixed(1)}%</Text>
+                </View>
+                <Slider
+                  style={styles.slider}
+                  minimumValue={0.5}
+                  maximumValue={10}
+                  step={0.5}
+                  value={maxTradeRisk}
+                  onValueChange={setMaxTradeRisk}
+                  minimumTrackTintColor={C.accentBright}
+                  maximumTrackTintColor={C.elevated}
+                  thumbTintColor={C.accentBright}
+                />
+              </View>
+
+              <View style={styles.sliderRow}>
+                <View style={styles.sliderHeader}>
+                  <Text style={styles.inputLabel}>Max Open Positions</Text>
+                  <Text style={styles.sliderValue}>{maxPositions}</Text>
+                </View>
+                <Slider
+                  style={styles.slider}
+                  minimumValue={1}
+                  maximumValue={20}
+                  step={1}
+                  value={maxPositions}
+                  onValueChange={setMaxPositions}
+                  minimumTrackTintColor={C.accentBright}
+                  maximumTrackTintColor={C.elevated}
+                  thumbTintColor={C.accentBright}
+                />
+              </View>
+
+              <Pressable onPress={handleSaveRisk} disabled={mutation.isPending}>
+                {({ pressed }) => (
                   <LinearGradient
                     colors={C.gradient.accent}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
-                    style={styles.connectBtn}
+                    style={[styles.saveButton, (pressed || mutation.isPending) && styles.saveButtonPressed]}
                   >
-                    <Text style={styles.connectBtnText}>Connect</Text>
+                    {mutation.isPending ? (
+                      <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                      <Text style={styles.saveButtonText}>Save Changes</Text>
+                    )}
                   </LinearGradient>
-                </Pressable>
-              )}
-            </View>
-            {zerodhaStatus?.authenticated && (
-              <Text style={styles.zerodhaNote}>
-                Token expires daily at 6:00 AM. Re-login required each trading day.
-              </Text>
-            )}
-          </Card>
+                )}
+              </Pressable>
+            </Card>
+          </Animated.View>
 
-          <Card style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Capital & Risk</Text>
-
-            <DarkInput label="Capital" prefix="₹" value={capital} onChangeText={setCapital} keyboardType="numeric" />
-            <DarkInput label="Max Daily Loss" prefix="₹" value={maxDailyLoss} onChangeText={setMaxDailyLoss} keyboardType="numeric" />
-
-            <View style={styles.sliderRow}>
-              <View style={styles.sliderHeader}>
-                <Text style={styles.inputLabel}>Max Trade Risk</Text>
-                <Text style={styles.sliderValue}>{maxTradeRisk.toFixed(1)}%</Text>
-              </View>
-              <Slider
-                style={styles.slider}
-                minimumValue={0.5}
-                maximumValue={10}
-                step={0.5}
-                value={maxTradeRisk}
-                onValueChange={setMaxTradeRisk}
-                minimumTrackTintColor={C.accentBright}
-                maximumTrackTintColor={C.elevated}
-                thumbTintColor={C.accentBright}
+          {/* System Info */}
+          <Animated.View entering={FadeInDown.delay(400).springify()}>
+            <Card style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>System Info</Text>
+              <SettingRow label="VIX Halt Threshold" value={String(settings?.vix_halt_threshold ?? 25)} />
+              <SettingRow
+                label="Consensus Threshold"
+                value={`${((settings?.consensus_threshold ?? 0.6) * 100).toFixed(0)}%`}
               />
-            </View>
-
-            <View style={styles.sliderRow}>
-              <View style={styles.sliderHeader}>
-                <Text style={styles.inputLabel}>Max Open Positions</Text>
-                <Text style={styles.sliderValue}>{maxPositions}</Text>
-              </View>
-              <Slider
-                style={styles.slider}
-                minimumValue={1}
-                maximumValue={20}
-                step={1}
-                value={maxPositions}
-                onValueChange={setMaxPositions}
-                minimumTrackTintColor={C.accentBright}
-                maximumTrackTintColor={C.elevated}
-                thumbTintColor={C.accentBright}
-              />
-            </View>
-
-            <Pressable onPress={handleSaveRisk} disabled={mutation.isPending}>
-              {({ pressed }) => (
-                <LinearGradient
-                  colors={C.gradient.accent}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                  style={[styles.saveButton, (pressed || mutation.isPending) && styles.saveButtonPressed]}
-                >
-                  {mutation.isPending ? (
-                    <ActivityIndicator color="#fff" size="small" />
-                  ) : (
-                    <Text style={styles.saveButtonText}>Save Changes</Text>
-                  )}
-                </LinearGradient>
-              )}
-            </Pressable>
-          </Card>
-
-          <Card style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>System Info</Text>
-            <SettingRow label="VIX Halt Threshold" value={String(settings?.vix_halt_threshold ?? 25)} />
-            <SettingRow
-              label="Consensus Threshold"
-              value={`${((settings?.consensus_threshold ?? 0.6) * 100).toFixed(0)}%`}
-            />
-          </Card>
+            </Card>
+          </Animated.View>
 
           {/* Account */}
-          <Card style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Account</Text>
-            <View style={styles.settingRow}>
-              <View style={[styles.settingIcon, { backgroundColor: C.accentLight }]}>
-                <Feather name="user" size={13} color={C.accentBright} />
+          <Animated.View entering={FadeInDown.delay(480).springify()}>
+            <Card style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>Account</Text>
+              <View style={styles.settingRow}>
+                <View style={[styles.settingIcon, { backgroundColor: C.accentLight }]}>
+                  <Feather name="user" size={13} color={C.accentBright} />
+                </View>
+                <Text style={styles.settingLabel}>{user?.email ?? "Unknown"}</Text>
               </View>
-              <Text style={styles.settingLabel}>{user?.email ?? "Unknown"}</Text>
-            </View>
-            <Pressable onPress={handleSignOut} style={styles.signOutBtn}>
-              <Feather name="log-out" size={16} color={C.red} />
-              <Text style={styles.signOutText}>Sign Out</Text>
-            </Pressable>
-          </Card>
+              <SignOutButton onPress={handleSignOut} />
+            </Card>
+          </Animated.View>
         </ScrollView>
       </Animated.View>
 
       <Modal visible={showPinModal} transparent animationType="fade">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <Animated.View entering={ZoomIn.springify()} style={styles.modalContent}>
             <View style={styles.modalIconWrap}>
               <Feather name="zap" size={28} color={C.red} />
             </View>
@@ -400,9 +457,15 @@ export default function SettingsScreen() {
             <Text style={styles.modalSubtitle}>
               Real orders will be placed. Enter your PIN to confirm.
             </Text>
+            <Text style={styles.modalWarning}>
+              Real money is at risk. Trades cannot be undone.
+            </Text>
             <View style={styles.pinInputWrap}>
               <TextInput
-                style={styles.pinInput}
+                style={[
+                  styles.pinInput,
+                  pinFocused && styles.pinInputFocused,
+                ]}
                 value={pin}
                 onChangeText={setPin}
                 keyboardType="number-pad"
@@ -411,6 +474,8 @@ export default function SettingsScreen() {
                 placeholder="• • • •"
                 placeholderTextColor={C.textTertiary}
                 autoFocus
+                onFocus={() => setPinFocused(true)}
+                onBlur={() => setPinFocused(false)}
               />
             </View>
             <View style={styles.modalButtons}>
@@ -428,10 +493,32 @@ export default function SettingsScreen() {
                 </LinearGradient>
               </Pressable>
             </View>
-          </View>
+          </Animated.View>
         </View>
       </Modal>
     </>
+  );
+}
+
+function SignOutButton({ onPress }: { onPress: () => void }) {
+  const scale = useSharedValue(1);
+
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <Animated.View style={animStyle}>
+      <Pressable
+        onPress={onPress}
+        onPressIn={() => { scale.value = withSpring(0.96, { damping: 15 }); }}
+        onPressOut={() => { scale.value = withSpring(1, { damping: 15 }); }}
+        style={styles.signOutBtn}
+      >
+        <Feather name="log-out" size={16} color={C.red} />
+        <Text style={styles.signOutText}>Sign Out</Text>
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -442,6 +529,9 @@ function DarkInput({
   prefix,
   suffix,
   keyboardType = "default",
+  focused = false,
+  onFocus,
+  onBlur,
 }: {
   label: string;
   value: string;
@@ -449,11 +539,17 @@ function DarkInput({
   prefix?: string;
   suffix?: string;
   keyboardType?: "default" | "numeric" | "decimal-pad" | "number-pad";
+  focused?: boolean;
+  onFocus?: () => void;
+  onBlur?: () => void;
 }) {
   return (
     <View style={styles.inputRow}>
       <Text style={styles.inputLabel}>{label}</Text>
-      <View style={styles.inputWrap}>
+      <View style={[
+        styles.inputWrap,
+        focused && styles.inputWrapFocused,
+      ]}>
         {!!prefix && <Text style={styles.inputAffix}>{prefix}</Text>}
         <TextInput
           style={styles.input}
@@ -462,6 +558,8 @@ function DarkInput({
           keyboardType={keyboardType}
           returnKeyType="done"
           placeholderTextColor={C.textTertiary}
+          onFocus={onFocus}
+          onBlur={onBlur}
         />
         {!!suffix && <Text style={styles.inputAffix}>{suffix}</Text>}
       </View>
@@ -512,6 +610,14 @@ const styles = StyleSheet.create({
     backgroundColor: C.elevated, borderRadius: 12, paddingHorizontal: 14,
     borderWidth: 1, borderColor: C.cardBorder,
   },
+  inputWrapFocused: {
+    borderColor: C.accentBright,
+    shadowColor: C.accentBright,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
+  },
   inputAffix: { fontSize: 15, fontFamily: "Inter_500Medium", color: C.textSecondary },
   input: { flex: 1, fontSize: 15, fontFamily: "Inter_500Medium", color: C.text, paddingVertical: 12, paddingHorizontal: 4 },
   sliderRow: { marginBottom: 16 },
@@ -534,12 +640,21 @@ const styles = StyleSheet.create({
     justifyContent: "center", alignItems: "center", marginBottom: 16,
   },
   modalTitle: { fontSize: 20, fontFamily: "Inter_700Bold", color: C.text, textAlign: "center", marginBottom: 8 },
-  modalSubtitle: { fontSize: 13, fontFamily: "Inter_400Regular", color: C.textSecondary, textAlign: "center", lineHeight: 20, marginBottom: 24 },
+  modalSubtitle: { fontSize: 13, fontFamily: "Inter_400Regular", color: C.textSecondary, textAlign: "center", lineHeight: 20, marginBottom: 8 },
+  modalWarning: { fontSize: 12, fontFamily: "Inter_500Medium", color: C.red, textAlign: "center", marginBottom: 20 },
   pinInputWrap: { width: "100%", marginBottom: 24 },
   pinInput: {
     backgroundColor: C.elevated, borderRadius: 14, fontSize: 28, fontFamily: "Inter_700Bold",
     color: C.text, textAlign: "center", paddingVertical: 14, letterSpacing: 10,
     borderWidth: 1, borderColor: C.cardBorder,
+  },
+  pinInputFocused: {
+    borderColor: C.red,
+    shadowColor: C.red,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 5,
   },
   modalButtons: { flexDirection: "row", gap: 12, width: "100%" },
   modalBtnCancel: {

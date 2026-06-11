@@ -1,6 +1,11 @@
 """Strike Selection Engine — selects optimal option strike based on strategy, Greeks, and liquidity."""
 
 import logging
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from config import NIFTY_LOT_SIZE, BANKNIFTY_LOT_SIZE
 
 logger = logging.getLogger("niftymind.strike_selector")
 
@@ -37,7 +42,10 @@ STRATEGY_CONFIG = {
 class StrikeSelector:
     def __init__(self, capital: float = 100_000):
         self.capital = capital
-        self.max_premium_pct = 0.05  # Max 5% of capital per lot
+        # Max premium outlay per lot as a fraction of capital. With 2026 lot
+        # sizes (NIFTY 65 / BANKNIFTY 30) an ATM weekly costs ~10-15% of a
+        # 1L account — 5% would filter out every tradeable ATM strike.
+        self.max_premium_pct = 0.15
 
     def select_strike(
         self,
@@ -102,7 +110,7 @@ class StrikeSelector:
                 continue
 
             # Filter 5: Premium ceiling (max 5% of capital)
-            lot_size = 25 if underlying == "NIFTY" else 15
+            lot_size = NIFTY_LOT_SIZE if underlying == "NIFTY" else BANKNIFTY_LOT_SIZE
             lot_cost = ltp * lot_size
             if lot_cost > self.capital * self.max_premium_pct:
                 continue
