@@ -61,11 +61,6 @@ jobs:
       # -----------------------------------------------------------------------
       # Step 2: Setup Node.js 18
       # -----------------------------------------------------------------------
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 8
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -95,10 +90,10 @@ jobs:
         run: yes | sdkmanager --licenses || true
 
       # -----------------------------------------------------------------------
-      - name: Install pnpm dependencies
+      - name: Install dependencies
         run: |
           echo "Installing dependencies..."
-          pnpm install || npm install
+          npm install || npm install
           echo "Dependencies installed successfully"
 
       # -----------------------------------------------------------------------
