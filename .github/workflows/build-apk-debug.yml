@@ -108,10 +108,16 @@ jobs:
       # -----------------------------------------------------------------------
       # Step 7: Run Expo prebuild to generate native Android project
       # -----------------------------------------------------------------------
+      - name: Install Expo dependencies
+        run: |
+          echo "Installing Expo dependencies..."
+          npx expo install
+          echo "Dependencies installed."
+
       - name: Expo prebuild (Android)
         run: |
           echo "Running expo prebuild for Android..."
-          yes | npx expo prebuild --platform android --clean
+          npx expo prebuild --platform android --clean --skip-dependency-update
           echo "Prebuild complete. Android project generated."
 
       # Verify the Android project was created
