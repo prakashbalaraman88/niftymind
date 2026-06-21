@@ -10,6 +10,10 @@ from agents import db_logger
 from agents.strike_selector import StrikeSelector
 from config import NIFTY_LOT_SIZE, BANKNIFTY_LOT_SIZE
 
+# ---- Trading fixes: dynamic expiry + position reconciliation ----------------
+from execution.expiry_calculator import ExpiryCalculator
+from execution.position_reconciler import PositionReconciler
+
 SIGNAL_TTL_SECONDS = 300
 
 SCALP_WEIGHTS = {
@@ -93,7 +97,9 @@ DIRECTION_SCORES = {"BULLISH": 1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}
 class ConsensusOrchestrator(BaseAgent):
     def __init__(self, redis_publisher, llm_config=None, consensus_threshold: float = 0.65,
                  accuracy_tracker=None, pre_trade_recall=None, outcome_model=None,
-                 capital: float = 100000):
+                 capital: float = 100000,
+                 expiry_calculator: ExpiryCalculator = None,
+                 position_reconciler: PositionReconciler = None):
         super().__init__("agent_12_consensus", "Consensus Orchestrator", redis_publisher)
         self._latest_signals: dict[str, dict] = {}
         self._consensus_threshold = consensus_threshold
@@ -106,6 +112,12 @@ class ConsensusOrchestrator(BaseAgent):
         self._strike_selector = StrikeSelector(capital=capital)
         self._latest_options: dict[str, list] = {}  # underlying -> options chain
         self._latest_spot: dict[str, float] = {}  # underlying -> spot price
+
+        # ---- Trading fixes: expiry + reconciliation -----------------------
+        self._expiry_calc = expiry_calculator or ExpiryCalculator()
+        self._position_reconciler = position_reconciler
+        self._reconciliation_check_enabled = position_reconciler is not None
+        self._skipped_trades_reconciliation = 0
 
     @property
     def subscribed_channels(self) -> list[str]:
@@ -189,6 +201,33 @@ class ConsensusOrchestrator(BaseAgent):
 
         underlying = self._determine_underlying()
         trade_id = f"CONSENSUS-{trade_type}-{uuid.uuid4().hex[:8]}"
+
+        # ---- Trading fix: position reconciliation check before new trade ----
+        if self._reconciliation_check_enabled and self._position_reconciler:
+            try:
+                recon_result = await self._position_reconciler.reconcile_before_new_trade(
+                    symbol=underlying,
+                    proposed_quantity=0,  # Will be set below
+                    direction=direction,
+                )
+                if not recon_result.get("can_trade", True):
+                    self._skipped_trades_reconciliation += 1
+                    self.logger.warning(
+                        f"Trade {trade_id} blocked by position reconciliation: "
+                        f"{recon_result.get('reason', '')} "
+                        f"(total_skipped={self._skipped_trades_reconciliation})"
+                    )
+                    db_logger.log_audit(
+                        event_type="TRADE_BLOCKED_RECONCILIATION",
+                        source=self.agent_id,
+                        message=f"Trade blocked: {recon_result.get('reason', '')}",
+                        trade_id=trade_id,
+                        details=recon_result.get("current_exposure", {}),
+                    )
+                    return None
+            except Exception as e:
+                self.logger.warning(f"Position reconciliation pre-trade check failed: {e}")
+
         self._log_votes_to_db(trade_id, trade_type, vote_details, underlying, direction, abs(score))
 
         # Select options strike
@@ -209,7 +248,11 @@ class ConsensusOrchestrator(BaseAgent):
             )
 
         if selected_strike:
-            symbol = f"{underlying}{self._format_expiry()}{int(selected_strike['strike'])}{selected_strike['option_type']}"
+            # ---- Trading fix: dynamic expiry calculation ------------------
+            expiry_suffix = self._expiry_calc.get_expiry_symbol_suffix(
+                underlying=underlying,
+            )
+            symbol = f"{underlying}{expiry_suffix}{int(selected_strike['strike'])}{selected_strike['option_type']}"
             entry_premium = selected_strike["ltp"]
             sl_points = round(entry_premium * 0.30, 1)  # 30% SL on premium
             target_points = round(entry_premium * 0.50, 1)  # 50% target on premium
@@ -224,6 +267,10 @@ class ConsensusOrchestrator(BaseAgent):
             sl_points = 20
             target_points = 40
             self.logger.warning(f"No options chain for strike selection — using fallback for {trade_id}")
+
+        # ---- Trading fix: expiry context for execution --------------------
+        is_expiry = self._expiry_calc.is_expiry_day(underlying)
+        days_to_exp = self._expiry_calc.days_to_expiry(underlying)
 
         proposal = {
             "agent_id": self.agent_id,
@@ -246,7 +293,8 @@ class ConsensusOrchestrator(BaseAgent):
                 "threshold": self._consensus_threshold,
                 "votes": vote_details,
                 "agents_reporting": len(self._latest_signals),
-                "is_expiry_day": self.is_expiry_day(),
+                "is_expiry_day": is_expiry,
+                "days_to_expiry": days_to_exp,
                 "vix_at_entry": self._current_vix,
                 "symbol": symbol,
                 "option_type": option_type,
@@ -256,6 +304,13 @@ class ConsensusOrchestrator(BaseAgent):
                 "selected_strike": selected_strike,
                 "entry_premium": entry_premium,
                 "spot_price": spot_price,
+                # ---- Trading fix: expiry metadata ----------------------------
+                "expiry_context": {
+                    "weekly_expiry": self._expiry_calc.get_weekly_expiry(underlying).isoformat(),
+                    "monthly_expiry": self._expiry_calc.get_monthly_expiry(underlying).isoformat(),
+                    "expiry_symbol_suffix": self._expiry_calc.get_expiry_symbol_suffix(underlying),
+                    "is_monthly_expiry": self._expiry_calc.is_monthly_expiry_day(underlying),
+                },
             },
         }
 
@@ -291,7 +346,8 @@ class ConsensusOrchestrator(BaseAgent):
         await self.publisher.publish_trade_proposal(proposal)
         self.logger.info(
             f"Consensus proposal published to trade_proposals: {trade_id} "
-            f"{direction} {underlying} ({trade_type}) score={score:.3f}"
+            f"{direction} {underlying} ({trade_type}) score={score:.3f} "
+            f"expiry={'TODAY' if is_expiry else f'in_{days_to_exp}d'}"
         )
         return None
 
@@ -359,16 +415,13 @@ class ConsensusOrchestrator(BaseAgent):
     def _format_expiry(self) -> str:
         """Format the nearest weekly expiry for display symbols, e.g. '26JUN16'.
 
+        DEPRECATED: Use ExpiryCalculator directly via self._expiry_calc.
+        Kept for backward compatibility.
+
         NSE index weekly expiry moved to TUESDAY effective 1 Sep 2025.
         """
-        now = datetime.now(IST)
-        days_ahead = (1 - now.weekday()) % 7  # Tuesday = 1
-        if days_ahead == 0 and now.hour >= 15:
-            days_ahead = 7
-        expiry = now + timedelta(days=days_ahead)
-        year_short = str(expiry.year)[-2:]
-        month_abbr = expiry.strftime("%b").upper()
-        return f"{year_short}{month_abbr}{expiry.day:02d}"
+        self.logger.warning("_format_expiry() is deprecated — use ExpiryCalculator")
+        return self._expiry_calc.get_expiry_symbol_suffix("NIFTY")
 
     def _determine_underlying(self) -> str:
         """Determine underlying based on signal confidence-weighted votes.
