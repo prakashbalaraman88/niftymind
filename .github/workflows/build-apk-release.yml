@@ -65,17 +65,12 @@ jobs:
       # -----------------------------------------------------------------------
       # Step 2: Setup Node.js 18
       # -----------------------------------------------------------------------
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 8
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18
-          cache: 'pnpm'
-          cache-dependency-path: artifacts/mobile/pnpm-lock.yaml
+          cache: 'npm'
+          cache-dependency-path: artifacts/mobile/package-lock.json
 
       # -----------------------------------------------------------------------
       # Step 3: Setup Java 17 (Temurin) - Required for Android Gradle build
@@ -116,7 +111,7 @@ jobs:
       - name: Install npm dependencies
         run: |
           echo "Installing dependencies..."
-          pnpm install --frozen-lockfile
+          npm ci || npm install
           echo "Dependencies installed successfully"
 
       # -----------------------------------------------------------------------
