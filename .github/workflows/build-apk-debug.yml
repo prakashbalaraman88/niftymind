@@ -90,10 +90,18 @@ jobs:
         run: yes | sdkmanager --licenses || true
 
       # -----------------------------------------------------------------------
+      # -----------------------------------------------------------------------
+      # Step 5: Setup pnpm
+      # -----------------------------------------------------------------------
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
       - name: Install dependencies
         run: |
           echo "Installing dependencies..."
-          pnpm install --no-frozen-lockfile || pnpm install --no-frozen-lockfile
+          pnpm install --no-frozen-lockfile
           echo "Dependencies installed successfully"
 
       # -----------------------------------------------------------------------
