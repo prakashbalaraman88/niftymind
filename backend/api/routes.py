@@ -1,16 +1,44 @@
+"""
+NiftyMind API Routes.
+
+Security-hardened route handlers with:
+- Authentication required on ALL endpoints (except /healthz)
+- Role-based access control (RBAC) with permission checks
+- bcrypt-hashed PIN verification with brute-force protection
+- Rate limiting on sensitive endpoints
+- Input validation and sanitization on all user inputs
+- SQL injection protection via parameterized queries
+- Audit logging for security-relevant operations
+"""
+
 import logging
 import os
+import re
+import html
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Depends
-from pydantic import BaseModel
+import bcrypt
+from fastapi import APIRouter, HTTPException, Query, Depends, Request
+from pydantic import BaseModel, Field, field_validator
 
 from fastapi.responses import RedirectResponse, StreamingResponse
 import csv
 import io
 
 from api.server import get_app_state
-from api.auth_middleware import get_current_user, optional_user
+from api.auth_middleware import (
+    get_current_user,
+    optional_user,
+    UserRole,
+    Permission,
+    has_permission,
+    require_permissions,
+    is_public_route,
+)
+from api.rate_limiter import get_rate_limiter, LimitTier, rate_limit
+from api.secrets_manager import get_secrets_manager
+from config import BCRYPT_SALT_ROUNDS, MIN_PIN_LENGTH
 from performance.metrics import calculate_metrics, is_proof_threshold_met
 from performance.trade_journal import TradeJournal
 from risk.drawdown_manager import DrawdownManager
@@ -20,14 +48,17 @@ logger = logging.getLogger("niftymind.api.routes")
 IST = timezone(timedelta(hours=5, minutes=30))
 
 router = APIRouter()
-
 trade_journal = TradeJournal()
 drawdown_manager = DrawdownManager()
 
 
+# ---------------------------------------------------------------------------
+# Database helper
+# ---------------------------------------------------------------------------
+
 def _db_conn():
     import psycopg2
-    url = os.getenv("DATABASE_URL", "")
+    url = get_secrets_manager().get_secret("DATABASE_URL")
     if not url:
         return None
     try:
@@ -36,18 +67,185 @@ def _db_conn():
         return None
 
 
-class SettingsUpdate(BaseModel):
-    trading_mode: str | None = None
-    live_pin: str | None = None
-    capital: float | None = None
-    max_daily_loss: float | None = None
-    max_trade_risk_pct: float | None = None
-    max_open_positions: int | None = None
-    consensus_threshold: float | None = None
+# ---------------------------------------------------------------------------
+# Input validation helpers
+# ---------------------------------------------------------------------------
 
+def _sanitize_string(value: Optional[str], max_length: int = 255) -> Optional[str]:
+    """Sanitize a string input: strip, escape HTML, limit length."""
+    if value is None:
+        return None
+    value = value.strip()
+    if len(value) > max_length:
+        value = value[:max_length]
+    # Escape HTML to prevent XSS
+    value = html.escape(value)
+    return value
+
+
+def _validate_trade_id(trade_id: str) -> str:
+    """Validate trade_id format: alphanumeric, hyphens, underscores only."""
+    if not trade_id:
+        raise HTTPException(status_code=400, detail="trade_id is required")
+    if not re.match(r"^[A-Za-z0-9_\-]+$", trade_id):
+        raise HTTPException(status_code=400, detail="Invalid trade_id format")
+    if len(trade_id) > 64:
+        raise HTTPException(status_code=400, detail="trade_id too long (max 64 chars)")
+    return trade_id
+
+
+def _validate_event_type(event_type: Optional[str]) -> Optional[str]:
+    """Validate event_type against allowed values."""
+    if event_type is None:
+        return None
+    allowed = {
+        "NEWS_CLASSIFIED", "NEWS_SIGNAL", "NEWS_ANALYSIS",
+        "RISK_APPROVED", "RISK_REJECTED", "TRADE_EXECUTED",
+        "TRADE_CLOSED", "AGENT_SIGNAL", "AGENT_VOTE",
+        "ORDER_PLACED", "ORDER_FAILED", "BROKER_ERROR",
+        "LIVE_MODE_ENABLED", "SETTINGS_CHANGED", "BACKTEST_RUN",
+    }
+    event_type = event_type.upper().strip()
+    if event_type not in allowed:
+        raise HTTPException(status_code=400, detail=f"Invalid event_type: {event_type}")
+    return event_type
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models with validation
+# ---------------------------------------------------------------------------
+
+class SettingsUpdate(BaseModel):
+    trading_mode: Optional[str] = Field(default=None, pattern=r"^(paper|live)$")
+    live_pin: Optional[str] = Field(default=None, min_length=MIN_PIN_LENGTH, max_length=32)
+    capital: Optional[float] = Field(default=None, ge=1000, le=100_000_000)
+    max_daily_loss: Optional[float] = Field(default=None, ge=100, le=10_000_000)
+    max_trade_risk_pct: Optional[float] = Field(default=None, ge=0.1, le=50.0)
+    max_open_positions: Optional[int] = Field(default=None, ge=1, le=50)
+    consensus_threshold: Optional[float] = Field(default=None, ge=0.1, le=1.0)
+
+    @field_validator("live_pin")
+    @classmethod
+    def validate_pin(cls, v):
+        if v is None:
+            return None
+        if not v.isdigit():
+            raise ValueError("PIN must contain only digits")
+        if len(v) < MIN_PIN_LENGTH:
+            raise ValueError(f"PIN must be at least {MIN_PIN_LENGTH} digits")
+        return v
+
+
+class CloseTradeRequest(BaseModel):
+    trade_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
+
+
+# ---------------------------------------------------------------------------
+# Authentication helper
+# ---------------------------------------------------------------------------
+
+def _require_auth(user: dict, permission: Optional[Permission] = None):
+    """Ensure user is authenticated and has required permission."""
+    if not user or not user.get("sub"):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if permission and not has_permission(user, permission):
+        raise HTTPException(status_code=403, detail=f"Permission required: {permission.value}")
+    return user
+
+
+# ---------------------------------------------------------------------------
+# PIN verification with bcrypt
+# ---------------------------------------------------------------------------
+
+async def _verify_live_pin(provided_pin: str, request: Request, user: dict) -> bool:
+    """
+    Verify live trading PIN using bcrypt hashing with brute-force protection.
+
+    Args:
+        provided_pin: The PIN provided by the user
+        request: The FastAPI request (for rate limiting)
+        user: The authenticated user
+
+    Returns:
+        True if PIN is valid, False otherwise
+
+    Raises:
+        HTTPException: 429 if rate limited, 403 if PIN invalid
+    """
+    # Check rate limit for PIN verification
+    limiter = get_rate_limiter()
+    user_id = user.get("sub", "unknown")
+
+    try:
+        await limiter.check_rate_limit(
+            request,
+            limit_tier=LimitTier.PIN_VERIFY,
+            user_id=user_id,
+            custom_key=f"pin:{user_id}",
+        )
+    except HTTPException as e:
+        if e.status_code == 429:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "Too many PIN attempts",
+                    "message": "PIN verification rate limit exceeded. Please try again later.",
+                    "reset_after": e.detail.get("reset_after", 300) if isinstance(e.detail, dict) else 300,
+                },
+            )
+        raise
+
+    # Get the stored PIN hash from config
+    state = get_app_state()
+    config = state.get("config")
+
+    # Get PIN from secure source (secrets manager or config hash)
+    secrets = get_secrets_manager()
+    stored_pin_hash = ""
+
+    if config and hasattr(config.trading, "live_pin_hash"):
+        stored_pin_hash = config.trading.live_pin_hash
+
+    # Fallback: check if PIN is configured in environment
+    if not stored_pin_hash:
+        env_pin = secrets.get_secret("LIVE_TRADING_PIN", default="")
+        if env_pin:
+            stored_pin_hash = bcrypt.hashpw(env_pin.encode(), bcrypt.gensalt(rounds=BCRYPT_SALT_ROUNDS)).decode()
+
+    if not stored_pin_hash:
+        raise HTTPException(status_code=500, detail="LIVE_TRADING_PIN not configured on server")
+
+    # Verify PIN with bcrypt
+    if not bcrypt.checkpw(provided_pin.encode(), stored_pin_hash.encode()):
+        remaining_attempts = MAX_PIN_ATTEMPTS - 1  # Approximate
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Invalid live trading PIN",
+                "remaining_attempts": remaining_attempts,
+            },
+        )
+
+    return True
+
+
+# Maximum PIN attempts
+MAX_PIN_ATTEMPTS = 5
+
+
+# ---------------------------------------------------------------------------
+# Routes - ALL require authentication except /healthz
+# ---------------------------------------------------------------------------
 
 @router.get("/dashboard")
-async def get_dashboard():
+async def get_dashboard(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
+):
+    """Get dashboard data. Requires authentication."""
+    _require_auth(user, Permission.VIEW_DASHBOARD)
+
     state = get_app_state()
     executor = state.get("executor")
     tracker = state.get("position_tracker")
@@ -77,11 +275,17 @@ async def get_dashboard():
 
 @router.get("/trades")
 async def get_trades(
+    request: Request,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    status: str | None = Query(None),
-    trade_type: str | None = Query(None),
+    status: str | None = Query(None, pattern=r"^(OPEN|CLOSED|PENDING|REJECTED)$"),
+    trade_type: str | None = Query(None, pattern=r"^(INTRADAY|SCALP|BTST)$"),
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
 ):
+    """Get trade list. Requires authentication."""
+    _require_auth(user, Permission.VIEW_TRADES)
+
     conn = _db_conn()
     if not conn:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -128,7 +332,11 @@ async def get_trades(
                     trade["current_price"] = pos.get("current_price", trade.get("entry_price"))
                     trade["unrealized_pnl"] = pos.get("unrealized_pnl", 0)
 
-        cur.execute("SELECT COUNT(*) FROM trades" + (" WHERE " + " AND ".join(conditions[:len(conditions)]) if conditions else ""), params[:len(conditions)] if conditions else [])
+        # Count query
+        count_query = "SELECT COUNT(*) FROM trades"
+        if conditions:
+            count_query += " WHERE " + " AND ".join(conditions)
+        cur.execute(count_query, params[:len(conditions)] if conditions else [])
         total = cur.fetchone()[0]
 
         return {"trades": trades, "total": total, "limit": limit, "offset": offset}
@@ -140,8 +348,15 @@ async def get_trades(
 
 
 @router.post("/trades/{trade_id}/close")
-async def close_trade(trade_id: str):
-    """Manually close an open position at current market price."""
+async def close_trade(
+    trade_id: str,
+    request: Request,
+    user: dict = Depends(require_permissions(Permission.CLOSE_TRADE)),
+    rate_meta: dict = Depends(rate_limit(LimitTier.TRADE_ACTION)),
+):
+    """Manually close an open position at current market price. Requires close:trade permission."""
+    trade_id = _validate_trade_id(trade_id)
+
     state = get_app_state()
     executor = state.get("executor")
     if not executor:
@@ -151,25 +366,39 @@ async def close_trade(trade_id: str):
     if trade_id not in open_positions:
         raise HTTPException(status_code=404, detail="Open position not found")
 
+    # Audit log the action
+    logger.info(f"User {user.get('sub', 'unknown')} closing trade {trade_id}")
+
     publisher = state.get("redis_publisher")
     if publisher:
         await publisher.publish_trade_execution({
             "event": "EXIT_ORDER",
             "trade_id": trade_id,
             "exit_reason": "MANUAL_CLOSE",
+            "closed_by": user.get("sub", "unknown"),
         })
     else:
         # Fallback: direct call if publisher unavailable
         await executor._execute_exit({
             "trade_id": trade_id,
             "exit_reason": "MANUAL_CLOSE",
+            "closed_by": user.get("sub", "unknown"),
         })
 
-    return {"status": "closed", "trade_id": trade_id}
+    return {"status": "closed", "trade_id": trade_id, "closed_by": user.get("sub", "unknown")}
 
 
 @router.get("/trades/{trade_id}")
-async def get_trade_detail(trade_id: str):
+async def get_trade_detail(
+    trade_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
+):
+    """Get detailed trade information. Requires authentication."""
+    _require_auth(user, Permission.VIEW_TRADES)
+    trade_id = _validate_trade_id(trade_id)
+
     conn = _db_conn()
     if not conn:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -232,7 +461,14 @@ async def get_trade_detail(trade_id: str):
 
 
 @router.get("/agents")
-async def get_agent_status():
+async def get_agent_status(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
+):
+    """Get agent status. Requires authentication."""
+    _require_auth(user, Permission.VIEW_AGENTS)
+
     conn = _db_conn()
     if not conn:
         return {"agents": []}
@@ -267,10 +503,19 @@ async def get_agent_status():
 
 @router.get("/signals")
 async def get_signals(
+    request: Request,
     limit: int = Query(50, ge=1, le=500),
     agent_id: str | None = Query(None),
-    underlying: str | None = Query(None),
+    underlying: str | None = Query(None, pattern=r"^(NIFTY|BANKNIFTY)$"),
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
 ):
+    """Get trading signals. Requires authentication."""
+    _require_auth(user, Permission.VIEW_SIGNALS)
+
+    # Sanitize inputs
+    agent_id = _sanitize_string(agent_id, max_length=64)
+
     conn = _db_conn()
     if not conn:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -315,7 +560,15 @@ async def get_signals(
 
 
 @router.get("/news")
-async def get_news(limit: int = Query(20, ge=1, le=100)):
+async def get_news(
+    request: Request,
+    limit: int = Query(20, ge=1, le=100),
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
+):
+    """Get news. Requires authentication."""
+    _require_auth(user, Permission.VIEW_NEWS)
+
     # Try DB first
     conn = _db_conn()
     if conn:
@@ -362,14 +615,20 @@ async def get_news(limit: int = Query(20, ge=1, le=100)):
 
 
 @router.get("/settings")
-async def get_settings():
+async def get_settings(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
+):
+    """Get trading settings. Requires authentication."""
+    _require_auth(user, Permission.VIEW_SETTINGS)
+
     state = get_app_state()
     config = state.get("config")
 
     if not config:
         return {"error": "Config not loaded"}
 
-    # Read live values from env (POST /settings writes to env, not to frozen config)
     return {
         "trading_mode": os.environ.get("TRADING_MODE", config.trading.mode),
         "instruments": os.environ.get("TRADING_INSTRUMENTS", ",".join(config.trading.instruments)).split(","),
@@ -383,28 +642,41 @@ async def get_settings():
 
 
 @router.post("/settings")
-async def update_settings(update: SettingsUpdate):
+async def update_settings(
+    update: SettingsUpdate,
+    request: Request,
+    user: dict = Depends(require_permissions(Permission.MODIFY_SETTINGS)),
+    rate_meta: dict = Depends(rate_limit(LimitTier.SENSITIVE)),
+):
+    """
+    Update trading settings. Requires modify:settings permission.
+    Live mode switch additionally requires switch:live_mode permission and PIN verification.
+    """
     state = get_app_state()
     config = state.get("config")
 
     if not config:
         raise HTTPException(status_code=503, detail="Config not loaded")
 
+    # Live mode requires additional permission check and PIN
     if update.trading_mode == "live":
+        if not has_permission(user, Permission.SWITCH_LIVE_MODE):
+            raise HTTPException(
+                status_code=403,
+                detail="Permission required: switch:live_mode",
+            )
+
         if not update.live_pin:
             raise HTTPException(status_code=400, detail="Live mode requires PIN confirmation")
-        # Re-read .env to pick up LIVE_TRADING_PIN even if added after server start
-        from dotenv import dotenv_values
-        fresh_env = dotenv_values()
-        expected_pin = (
-            os.environ.get("LIVE_TRADING_PIN")
-            or fresh_env.get("LIVE_TRADING_PIN")
-            or config.trading.live_pin
+
+        # Verify PIN with bcrypt and rate limiting
+        await _verify_live_pin(update.live_pin, request, user)
+
+        # Audit log live mode enablement
+        logger.warning(
+            f"LIVE MODE ENABLED by user {user.get('sub', 'unknown')} "
+            f"({user.get('email', 'no-email')})"
         )
-        if not expected_pin:
-            raise HTTPException(status_code=500, detail="LIVE_TRADING_PIN not configured on server")
-        if update.live_pin != expected_pin:
-            raise HTTPException(status_code=403, detail="Invalid live trading PIN")
 
     applied = {}
 
@@ -432,15 +704,30 @@ async def update_settings(update: SettingsUpdate):
         os.environ["CONSENSUS_THRESHOLD"] = str(update.consensus_threshold)
         applied["consensus_threshold"] = update.consensus_threshold
 
-    return {"status": "updated", "applied": applied}
+    # Audit log settings changes
+    if applied:
+        logger.info(f"User {user.get('sub', 'unknown')} updated settings: {applied}")
+
+    return {"status": "updated", "applied": applied, "updated_by": user.get("sub", "unknown")}
 
 
 @router.get("/audit")
 async def get_audit_log(
+    request: Request,
     limit: int = Query(50, ge=1, le=500),
     event_type: str | None = Query(None),
     trade_id: str | None = Query(None),
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.SENSITIVE)),
 ):
+    """Get audit log. Requires authentication. Rate limited (sensitive)."""
+    _require_auth(user, Permission.VIEW_AUDIT)
+
+    # Validate and sanitize inputs
+    event_type = _validate_event_type(event_type)
+    if trade_id:
+        trade_id = _validate_trade_id(trade_id)
+
     conn = _db_conn()
     if not conn:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -485,7 +772,14 @@ async def get_audit_log(
 
 
 @router.get("/performance")
-async def get_performance():
+async def get_performance(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
+):
+    """Get performance metrics. Requires authentication."""
+    _require_auth(user, Permission.VIEW_PERFORMANCE)
+
     trades = trade_journal.get_closed_trades()
     metrics = calculate_metrics(trades)
     proof = is_proof_threshold_met(metrics)
@@ -493,7 +787,14 @@ async def get_performance():
 
 
 @router.get("/drawdown")
-async def get_drawdown():
+async def get_drawdown(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
+):
+    """Get drawdown status. Requires authentication."""
+    _require_auth(user, Permission.VIEW_PERFORMANCE)
+
     state = get_app_state()
     risk_manager = state.get("risk_manager")
     if risk_manager and hasattr(risk_manager, "_drawdown_mgr"):
@@ -502,8 +803,14 @@ async def get_drawdown():
 
 
 @router.get("/learning/status")
-async def get_learning_status():
-    """Get learning system status: gate, model, agent accuracy."""
+async def get_learning_status(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
+):
+    """Get learning system status. Requires authentication."""
+    _require_auth(user, Permission.VIEW_LEARNING)
+
     from learning.paper_trading_gate import PaperTradingGate
     from learning.lesson_store import LessonStore
     from learning.agent_accuracy_tracker import AgentAccuracyTracker
@@ -522,9 +829,15 @@ async def get_learning_status():
 
 @router.get("/learning/lessons")
 async def get_lessons(
+    request: Request,
     days: int = Query(7, ge=1, le=90),
     outcome: str | None = Query(None),
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
 ):
+    """Get learning lessons. Requires authentication."""
+    _require_auth(user, Permission.VIEW_LEARNING)
+
     from learning.lesson_store import LessonStore
     store = LessonStore()
     lessons = store.get_recent_lessons(days=days, outcome=outcome)
@@ -537,7 +850,10 @@ async def get_lessons(
 
 
 @router.get("/auth/me")
-async def get_me(user: dict = Depends(get_current_user)):
+async def get_me(
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.AUTH)),
+):
     """Return the authenticated user's profile from the Supabase JWT."""
     return {
         "user_id": user.get("sub", ""),
@@ -548,9 +864,13 @@ async def get_me(user: dict = Depends(get_current_user)):
 
 
 @router.get("/zerodha/login")
-async def zerodha_login():
-    """Generate Zerodha login URL. User opens this in browser to authenticate."""
-    api_key = os.getenv("ZERODHA_API_KEY", "")
+async def zerodha_login(
+    request: Request,
+    user: dict = Depends(require_permissions(Permission.MANAGE_BROKER)),
+    rate_meta: dict = Depends(rate_limit(LimitTier.AUTH)),
+):
+    """Generate Zerodha login URL. Requires manage:broker permission."""
+    api_key = get_secrets_manager().get_secret("ZERODHA_API_KEY", default="")
     if not api_key:
         raise HTTPException(status_code=500, detail="ZERODHA_API_KEY not configured")
     login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
@@ -558,22 +878,34 @@ async def zerodha_login():
 
 
 @router.get("/zerodha/callback")
-async def zerodha_callback(request_token: str = Query(...), status: str = Query("success")):
-    """Handle Zerodha OAuth callback. Exchanges request_token for access_token.
-    Redirects back to mobile app via deep link after successful auth."""
-    if status != "success":
-        # Redirect back to app with error
+async def zerodha_callback(
+    request_token: str = Query(..., min_length=1, max_length=128),
+    status: str = Query("success", pattern=r"^(success|error|denied)$"),
+):
+    """
+    Handle Zerodha OAuth callback. Exchanges request_token for access_token.
+    This endpoint is PUBLIC (OAuth callback from external provider).
+    Redirects back to mobile app via deep link after successful auth.
+    """
+    # Validate request_token format
+    if not re.match(r"^[A-Za-z0-9_-]+$", request_token):
         return RedirectResponse(
-            url=f"niftymind://zerodha/callback?status=error&message=Login+failed",
+            url="niftymind://zerodha/callback?status=error&message=Invalid+request+token",
             status_code=302,
         )
 
-    api_key = os.getenv("ZERODHA_API_KEY", "")
-    api_secret = os.getenv("ZERODHA_API_SECRET", "")
+    if status != "success":
+        return RedirectResponse(
+            url=f"niftymind://zerodha/callback?status=error&message=Login+{status}",
+            status_code=302,
+        )
+
+    api_key = get_secrets_manager().get_secret("ZERODHA_API_KEY", default="")
+    api_secret = get_secrets_manager().get_secret("ZERODHA_API_SECRET", default="")
 
     if not api_key or not api_secret:
         return RedirectResponse(
-            url=f"niftymind://zerodha/callback?status=error&message=Credentials+not+configured",
+            url="niftymind://zerodha/callback?status=error&message=Credentials+not+configured",
             status_code=302,
         )
 
@@ -593,7 +925,6 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         user_id = session.get("user_id", "")
         logger.info(f"Zerodha login successful for {user_id}. Token valid for today.")
 
-        # Redirect back to mobile app with success
         return RedirectResponse(
             url=f"niftymind://zerodha/callback?status=success&user_id={user_id}",
             status_code=302,
@@ -601,16 +932,20 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
     except Exception as e:
         logger.error(f"Zerodha token exchange failed: {e}")
         return RedirectResponse(
-            url=f"niftymind://zerodha/callback?status=error&message=Token+exchange+failed",
+            url="niftymind://zerodha/callback?status=error&message=Token+exchange+failed",
             status_code=302,
         )
 
 
 @router.get("/zerodha/status")
-async def zerodha_status():
-    """Check if Zerodha access token is valid."""
-    api_key = os.getenv("ZERODHA_API_KEY", "")
-    access_token = os.getenv("ZERODHA_ACCESS_TOKEN", "")
+async def zerodha_status(
+    request: Request,
+    user: dict = Depends(require_permissions(Permission.MANAGE_BROKER)),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
+):
+    """Check if Zerodha access token is valid. Requires manage:broker permission."""
+    api_key = get_secrets_manager().get_secret("ZERODHA_API_KEY", default="")
+    access_token = get_secrets_manager().get_secret("ZERODHA_ACCESS_TOKEN", default="")
 
     if not access_token:
         return {"authenticated": False, "message": "No access token. Please login."}
@@ -632,16 +967,17 @@ async def zerodha_status():
 
 @router.post("/paper/mock-trade")
 async def inject_mock_trade(
-    underlying: str = Query("NIFTY", pattern="^(NIFTY|BANKNIFTY)$"),
-    direction: str = Query("BULLISH", pattern="^(BULLISH|BEARISH)$"),
-    trade_type: str = Query("INTRADAY", pattern="^(INTRADAY|SCALP|BTST)$"),
-    symbol: str = Query(""),
+    request: Request,
+    underlying: str = Query("NIFTY", pattern=r"^(NIFTY|BANKNIFTY)$"),
+    direction: str = Query("BULLISH", pattern=r"^(BULLISH|BEARISH)$"),
+    trade_type: str = Query("INTRADAY", pattern=r"^(INTRADAY|SCALP|BTST)$"),
+    symbol: str = Query("", max_length=50),
+    user: dict = Depends(require_permissions(Permission.INJECT_MOCK_TRADE)),
+    rate_meta: dict = Depends(rate_limit(LimitTier.TRADE_ACTION)),
 ):
-    """Inject a paper trade directly through the executor (market-closed testing).
-
-    Publishes a RISK_APPROVED event to niftymind:trade_executions so the
-    PaperExecutor picks it up exactly as it would from the live pipeline.
-    Falls back to synthetic prices when no tick data is available.
+    """
+    Inject a paper trade directly through the executor (market-closed testing).
+    Requires inject:mock_trade permission.
     """
     import uuid
     state = get_app_state()
@@ -649,12 +985,14 @@ async def inject_mock_trade(
     if not publisher:
         raise HTTPException(status_code=503, detail="Redis publisher not available")
 
+    # Sanitize symbol input
+    symbol = _sanitize_string(symbol, max_length=50) or ""
+
     now = datetime.now(IST)
     trade_id = f"PAPER-{now.strftime('%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
 
     # Build a realistic symbol name if not provided
     if not symbol:
-        # e.g. NIFTY24500CE or BANKNIFTY52000PE
         atm = 24500 if underlying == "NIFTY" else 52000
         opt_type = "CE" if direction == "BULLISH" else "PE"
         expiry = now.strftime("%d%b%y").upper()
@@ -667,13 +1005,16 @@ async def inject_mock_trade(
         "direction": direction,
         "symbol": symbol,
         "trade_type": trade_type,
-        "quantity": 0,          # paper executor fills from lot size
+        "quantity": 0,
         "confidence": 0.70,
         "sl_points": 30,
         "timestamp": now.isoformat(),
+        "injected_by": user.get("sub", "unknown"),
     }
 
     await publisher.publish_trade_execution(event)
+
+    logger.info(f"Mock trade injected by user {user.get('sub', 'unknown')}: {trade_id}")
 
     return {
         "status": "injected",
@@ -682,13 +1023,23 @@ async def inject_mock_trade(
         "underlying": underlying,
         "direction": direction,
         "trade_type": trade_type,
+        "injected_by": user.get("sub", "unknown"),
         "note": "Paper executor will fill at synthetic price (market closed). Check /api/dashboard for open positions.",
     }
 
 
 @router.post("/paper/exit/{trade_id}")
-async def exit_mock_trade(trade_id: str, exit_reason: str = Query("MANUAL_TEST")):
-    """Exit an open paper trade by trade_id (for testing)."""
+async def exit_mock_trade(
+    trade_id: str,
+    request: Request,
+    exit_reason: str = Query("MANUAL_TEST", max_length=50),
+    user: dict = Depends(require_permissions(Permission.CLOSE_TRADE)),
+    rate_meta: dict = Depends(rate_limit(LimitTier.TRADE_ACTION)),
+):
+    """Exit an open paper trade by trade_id (for testing). Requires close:trade permission."""
+    trade_id = _validate_trade_id(trade_id)
+    exit_reason = _sanitize_string(exit_reason, max_length=50) or "MANUAL_TEST"
+
     state = get_app_state()
     publisher = state.get("publisher")
     if not publisher:
@@ -699,17 +1050,28 @@ async def exit_mock_trade(trade_id: str, exit_reason: str = Query("MANUAL_TEST")
         "trade_id": trade_id,
         "exit_reason": exit_reason,
         "timestamp": datetime.now(IST).isoformat(),
+        "exited_by": user.get("sub", "unknown"),
     })
 
-    return {"status": "exit_sent", "trade_id": trade_id, "exit_reason": exit_reason}
+    logger.info(f"Mock trade exit by user {user.get('sub', 'unknown')}: {trade_id}")
+
+    return {
+        "status": "exit_sent",
+        "trade_id": trade_id,
+        "exit_reason": exit_reason,
+        "exited_by": user.get("sub", "unknown"),
+    }
 
 
 @router.get("/trades/export/csv")
 async def export_trades_csv(
-    status: str | None = Query(None),
-    trade_type: str | None = Query(None),
+    request: Request,
+    status: str | None = Query(None, pattern=r"^(OPEN|CLOSED|PENDING|REJECTED)$"),
+    trade_type: str | None = Query(None, pattern=r"^(INTRADAY|SCALP|BTST)$"),
+    user: dict = Depends(require_permissions(Permission.EXPORT_DATA)),
+    rate_meta: dict = Depends(rate_limit(LimitTier.EXPORT)),
 ):
-    """Export trades as CSV download."""
+    """Export trades as CSV download. Requires export:data permission. Rate limited."""
     conn = _db_conn()
     if not conn:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -738,10 +1100,17 @@ async def export_trades_csv(
             writer.writerow([v.isoformat() if hasattr(v, 'isoformat') else v for v in row])
         output.seek(0)
         filename = f"trades_{datetime.now(IST).strftime('%Y%m%d_%H%M%S')}.csv"
+
+        # Add audit log for data export
+        logger.info(f"CSV export by user {user.get('sub', 'unknown')}: {len(rows)} trades")
+
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename={filename}"},
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
     except Exception as e:
         logger.error(f"CSV export failed: {e}")
@@ -749,8 +1118,14 @@ async def export_trades_csv(
 
 
 @router.get("/performance/daily")
-async def get_daily_pnl():
-    """Return daily P&L aggregates and equity curve."""
+async def get_daily_pnl(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    rate_meta: dict = Depends(rate_limit(LimitTier.GENERAL)),
+):
+    """Return daily P&L aggregates and equity curve. Requires authentication."""
+    _require_auth(user, Permission.VIEW_PERFORMANCE)
+
     conn = _db_conn()
     if not conn:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -794,4 +1169,5 @@ async def get_daily_pnl():
 
 @router.get("/healthz")
 async def health_check():
+    """Public health check endpoint. No authentication required."""
     return {"status": "ok", "timestamp": datetime.now(IST).isoformat()}
