@@ -93,7 +93,7 @@ jobs:
       - name: Install dependencies
         run: |
           echo "Installing dependencies..."
-          npm install || npm install
+          pnpm install --no-frozen-lockfile || pnpm install --no-frozen-lockfile
           echo "Dependencies installed successfully"
 
       # -----------------------------------------------------------------------
