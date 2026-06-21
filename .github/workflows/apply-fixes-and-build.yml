@@ -294,7 +294,7 @@ jobs:
 
     env:
       NODE_ENV: ${{ github.event.inputs.build_type == 'release' && 'production' || 'development' }}
-      # No Expo token needed for Gradle build
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       JAVA_HOME: ${{ github.workspace }}/artifacts/mobile/java
@@ -330,17 +330,12 @@ jobs:
       # -----------------------------------------------------------------------
       # Step 3: Setup Node.js 18
       # -----------------------------------------------------------------------
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 8
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18
-          cache: 'pnpm'
-          cache-dependency-path: artifacts/mobile/pnpm-lock.yaml
+          cache: 'npm'
+          cache-dependency-path: artifacts/mobile/package-lock.json
 
       # -----------------------------------------------------------------------
       # Step 4: Setup Java 17 (Temurin)
@@ -379,7 +374,7 @@ jobs:
       - name: Install npm dependencies
         run: |
           echo "Installing dependencies..."
-          pnpm install --frozen-lockfile
+          npm ci || npm install
           echo "Dependencies installed."
 
       # -----------------------------------------------------------------------
