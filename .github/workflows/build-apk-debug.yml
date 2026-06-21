@@ -44,6 +44,7 @@ jobs:
         working-directory: artifacts/mobile
 
     env:
+      CI: true
       NODE_ENV: development
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -110,7 +111,7 @@ jobs:
       - name: Expo prebuild (Android)
         run: |
           echo "Running expo prebuild for Android..."
-          CI=1 npx expo prebuild --platform android --clean
+          npx expo prebuild --platform android --clean
           echo "Prebuild complete. Android project generated."
 
       # Verify the Android project was created
