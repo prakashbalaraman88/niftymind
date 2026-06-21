@@ -45,7 +45,7 @@ jobs:
 
     env:
       NODE_ENV: development
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      # EXPO_TOKEN not needed for Gradle build
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       JAVA_HOME: ${{ github.workspace }}/artifacts/mobile/java
@@ -62,12 +62,17 @@ jobs:
       # -----------------------------------------------------------------------
       # Step 2: Setup Node.js 18
       # -----------------------------------------------------------------------
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18
-          cache: 'npm'
-          cache-dependency-path: artifacts/mobile/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: artifacts/mobile/pnpm-lock.yaml
 
       # -----------------------------------------------------------------------
       # Step 3: Setup Java 17 (Temurin) - Required for Android Gradle build
@@ -95,20 +100,13 @@ jobs:
       # -----------------------------------------------------------------------
       # Step 5: Setup Expo and EAS CLI
       # -----------------------------------------------------------------------
-      - name: Setup Expo
-        uses: expo/expo-github-action@v8
-        with:
-          expo-version: latest
-          eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
-
       # -----------------------------------------------------------------------
-      # Step 6: Install dependencies
+      # Step 5: Install dependencies
       # -----------------------------------------------------------------------
-      - name: Install npm dependencies
+      - name: Install pnpm dependencies
         run: |
           echo "Installing dependencies..."
-          npm ci || npm install
+          pnpm install --frozen-lockfile
           echo "Dependencies installed successfully"
 
       # -----------------------------------------------------------------------
