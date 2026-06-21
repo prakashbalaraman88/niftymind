@@ -45,7 +45,6 @@ jobs:
 
     env:
       NODE_ENV: development
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       JAVA_HOME: ${{ github.workspace }}/artifacts/mobile/java
@@ -96,22 +95,10 @@ jobs:
         run: yes | sdkmanager --licenses || true
 
       # -----------------------------------------------------------------------
-      # Step 5: Setup Expo and EAS CLI
-      # -----------------------------------------------------------------------
-      - name: Setup Expo
-        uses: expo/expo-github-action@v8
-        with:
-          expo-version: latest
-          eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
-
-      # -----------------------------------------------------------------------
-      # Step 6: Install dependencies
-      # -----------------------------------------------------------------------
-      - name: Install npm dependencies
+      - name: Install pnpm dependencies
         run: |
           echo "Installing dependencies..."
-          npm ci || npm install
+          pnpm install || npm install
           echo "Dependencies installed successfully"
 
       # -----------------------------------------------------------------------
