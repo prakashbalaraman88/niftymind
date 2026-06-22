@@ -182,31 +182,6 @@ jobs:
           compression-level: 0  # APK is already compressed
 
       # -----------------------------------------------------------------------
-      # Step 12: Create GitHub Release with APK attached (optional)
-      # -----------------------------------------------------------------------
-      - name: Create GitHub Release (debug)
-        if: github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: debug-${{ github.run_number }}
-          name: NiftyMind Debug Build #${{ github.run_number }}
-          body: |
-            Debug APK build triggered by ${{ github.actor }}
-
-            - Build number: ${{ github.run_number }}
-            - Commit: ${{ github.sha }}
-            - Branch: ${{ github.ref_name }}
-            - Trigger: ${{ github.event_name }}
-
-            Install the APK on your Android device to test.
-          files: artifacts/mobile/android/app/build/outputs/apk/debug/app-debug.apk
-          prerelease: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # -----------------------------------------------------------------------
-      # Step 13: Build summary
-      # -----------------------------------------------------------------------
       - name: Build summary
         if: always()
         run: |
