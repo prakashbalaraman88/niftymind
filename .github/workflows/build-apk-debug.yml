@@ -117,7 +117,7 @@ jobs:
       - name: Expo prebuild (Android)
         run: |
           echo "Running expo prebuild for Android..."
-          echo "y" | npx expo prebuild --platform android
+          script -q /dev/null -c "npx expo prebuild --platform android"
           echo "Prebuild complete. Android project generated."
 
       # Verify the Android project was created
