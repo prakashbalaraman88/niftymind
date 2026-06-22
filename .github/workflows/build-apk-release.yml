@@ -1,257 +1,41 @@
-# =============================================================================
-# NiftyMind - Release APK Build Workflow
-# =============================================================================
-# Trigger: Manual only (workflow_dispatch) - PRODUCTION builds
-# Usage: Go to Actions tab → "Build Release APK" → "Run workflow"
-# Produces: Optimized, signed (or sign-ready) APK for distribution
-# =============================================================================
-
+# NiftyMind - RELEASE APK Build
 name: Build Release APK
-
 on:
-  # Manual trigger only - production builds should be intentional
   workflow_dispatch:
-    inputs:
-      version_name:
-        description: 'Version name for this release (e.g., 1.2.3)'
-        required: false
-        default: ''
-        type: string
-      create_release:
-        description: 'Create a GitHub Release with the APK'
-        required: false
-        default: true
-        type: boolean
-      cache_enabled:
-        description: 'Enable Gradle build cache'
-        required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-
-# Prevent concurrent release builds
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  build-release-apk:
-    name: Build Release APK
+  build-release:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: artifacts/mobile
-
     env:
-      NODE_ENV: production
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      CI: true
       ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      JAVA_HOME: ${{ github.workspace }}/artifacts/mobile/java
-
     steps:
-      # -----------------------------------------------------------------------
-      # Step 1: Checkout repository code
-      # -----------------------------------------------------------------------
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v2
         with:
-          fetch-depth: 1
-
-      # -----------------------------------------------------------------------
-      # Step 2: Setup Node.js 18
-      # -----------------------------------------------------------------------
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+          version: 9
+      - uses: actions/setup-node@v4
         with:
           node-version: 18
-          cache: 'npm'
-          cache-dependency-path: artifacts/mobile/package-lock.json
-
-      # -----------------------------------------------------------------------
-      # Step 3: Setup Java 17 (Temurin) - Required for Android Gradle build
-      # -----------------------------------------------------------------------
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
-
-      # Export JAVA_HOME for Gradle to use
-      - name: Export JAVA_HOME
-        run: echo "JAVA_HOME=${{ steps.setup-java.outputs.path }}" >> $GITHUB_ENV
-
-      # -----------------------------------------------------------------------
-      # Step 4: Setup Android SDK
-      # -----------------------------------------------------------------------
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      # Accept Android SDK licenses automatically
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses || true
-
-      # -----------------------------------------------------------------------
-      # Step 5: Setup Expo and EAS CLI
-      # -----------------------------------------------------------------------
-      - name: Setup Expo
-        uses: expo/expo-github-action@v8
-        with:
-          expo-version: latest
-          eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
-
-      # -----------------------------------------------------------------------
-      # Step 6: Install dependencies
-      # -----------------------------------------------------------------------
-      - name: Install npm dependencies
-        run: |
-          echo "Installing dependencies..."
-          npm ci || npm install
-          echo "Dependencies installed successfully"
-
-      # -----------------------------------------------------------------------
-      # Step 7: Run Expo prebuild to generate native Android project
-      # -----------------------------------------------------------------------
-      - name: Expo prebuild (Android)
-        run: |
-          echo "Running expo prebuild for Android..."
-          npx expo prebuild --platform android --clean
-          echo "Prebuild complete. Android project generated."
-
-      # Verify the Android project was created
-      - name: Verify Android project structure
-        run: |
-          echo "Checking Android project..."
-          ls -la android/
-          ls -la android/app/
-          test -f android/gradlew && echo "Gradle wrapper found" || echo "WARNING: Gradle wrapper missing"
-
-      # -----------------------------------------------------------------------
-      # Step 8: Make Gradle wrapper executable
-      # -----------------------------------------------------------------------
-      - name: Make gradlew executable
-        run: chmod +x android/gradlew
-
-      # -----------------------------------------------------------------------
-      # Step 9: Build Release APK with Gradle
-      # -----------------------------------------------------------------------
-      # Note: Release build requires signing config.
-      # For unsigned release APK, Gradle will produce app-release-unsigned.apk
-      # If you configure signing, it will produce app-release.apk
-      - name: Build release APK (assembleRelease)
-        run: |
-          echo "Starting release APK build..."
+      - uses: android-actions/setup-android@v3
+      - run: yes | sdkmanager --licenses || true
+      - run: pnpm install --no-frozen-lockfile
+      - run: npx expo install
+      - run: script -q /dev/null -c "npx expo prebuild --platform android"
+      - run: chmod +x android/gradlew
+      - run: |
           cd android
-          if [ "${{ github.event.inputs.cache_enabled }}" = "false" ]; then
-            ./gradlew clean
-          fi
-          ./gradlew assembleRelease \
-            --no-daemon \
-            --build-cache \
-            --parallel \
-            --configure-on-demand
-          echo "Release APK build complete!"
-        timeout-minutes: 30
-
-      # -----------------------------------------------------------------------
-      # Step 10: Locate and verify the release APK
-      # -----------------------------------------------------------------------
-      - name: Verify APK output
-        run: |
-          # Check for signed release APK first
-          APK_PATH="android/app/build/outputs/apk/release/app-release.apk"
-          # Fallback to unsigned if not signed
-          UNSIGNED_PATH="android/app/build/outputs/apk/release/app-release-unsigned.apk"
-
-          if [ -f "$APK_PATH" ]; then
-            echo "Signed release APK found at: $APK_PATH"
-            ls -lh "$APK_PATH"
-            echo "APK_PATH=$APK_PATH" >> $GITHUB_ENV
-            echo "APK_SIZE=$(stat -c%s "$APK_PATH")" >> $GITHUB_ENV
-            echo "SIGNED=true" >> $GITHUB_ENV
-          elif [ -f "$UNSIGNED_PATH" ]; then
-            echo "Unsigned release APK found at: $UNSIGNED_PATH"
-            echo "NOTE: APK is unsigned. Install requires manual signing or debug installation."
-            ls -lh "$UNSIGNED_PATH"
-            echo "APK_PATH=$UNSIGNED_PATH" >> $GITHUB_ENV
-            echo "APK_SIZE=$(stat -c%s "$UNSIGNED_PATH")" >> $GITHUB_ENV
-            echo "SIGNED=false" >> $GITHUB_ENV
-          else
-            echo "ERROR: Release APK not found at expected paths!"
-            echo "Searching for APK files..."
-            find android -name "*.apk" -type f
-            exit 1
-          fi
-
-      # -----------------------------------------------------------------------
-      # Step 11: Upload APK as GitHub artifact
-      # -----------------------------------------------------------------------
-      - name: Upload release APK artifact
+          ./gradlew assembleRelease --no-daemon --build-cache --parallel --configure-on-demand
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: niftymind-release-apk
-          path: ${{ env.APK_PATH }}
+          path: artifacts/mobile/android/app/build/outputs/apk/release/*.apk
           retention-days: 90
-          if-no-files-found: error
-          compression-level: 0  # APK is already compressed
-
-      # -----------------------------------------------------------------------
-      # Step 12: Create GitHub Release with APK attached
-      # -----------------------------------------------------------------------
-      - name: Create GitHub Release
-        if: github.event.inputs.create_release == true
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: release-${{ github.run_number }}
-          name: |
-            NiftyMind Release ${{
-              github.event.inputs.version_name != '' && format('v{0}', github.event.inputs.version_name)
-              || format('#{0}', github.run_number)
-            }}
-          body: |
-            NiftyMind Release APK
-
-            - Build: #${{ github.run_number }}
-            - Version: ${{ github.event.inputs.version_name || 'Not specified' }}
-            - Commit: ${{ github.sha }}
-            - Branch: ${{ github.ref_name }}
-            - Signed: ${{ env.SIGNED }}
-            - Triggered by: @${{ github.actor }}
-
-            ## Installation
-            1. Download the APK from below
-            2. Transfer to your Android device
-            3. Open the file to install (may need to enable "Install from unknown sources")
-
-            ## Notes
-            - Release APK is optimized (ProGuard/R8 minification applied)
-            - File size should be smaller than debug builds
-            ${{ env.SIGNED == 'false' && '- **This APK is UNSIGNED** - You may need to sign it before distribution' || '' }}
-          files: ${{ env.APK_PATH }}
-          prerelease: false
-          generate_release_notes: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # -----------------------------------------------------------------------
-      # Step 13: Build summary
-      # -----------------------------------------------------------------------
-      - name: Build summary
-        if: always()
-        run: |
-          echo "========================================"
-          echo "  NiftyMind Release Build Summary"
-          echo "========================================"
-          echo "Status: ${{ job.status }}"
-          echo "Signed: ${{ env.SIGNED }}"
-          echo "APK: ${{ env.APK_PATH }}"
-          if [ -n "${{ env.APK_SIZE }}" ]; then
-            echo "Size: $(numfmt --to=iec ${{ env.APK_SIZE }})"
-          fi
-          echo "Download: Go to Actions → this run → Artifacts"
-          echo "========================================"
