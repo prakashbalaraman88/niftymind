@@ -30,9 +30,12 @@ jobs:
       - run: npx expo install
       - run: script -q /dev/null -c "npx expo prebuild --platform android"
       - run: chmod +x android/gradlew
-      - run: |
+      - name: Configure release signing with debug keystore
+        run: |
           cd android
-          ./gradlew assembleRelease --no-daemon --build-cache --parallel --configure-on-demand
+          mkdir -p app/src/main/assets
+          # Use debug keystore for release signing (works for sideloading)
+          ./gradlew assembleRelease             -Pandroid.injected.signing.store.file=$ANDROID_HOME/debug.keystore             -Pandroid.injected.signing.store.password=android             -Pandroid.injected.signing.key.alias=androiddebugkey             -Pandroid.injected.signing.key.password=android             --no-daemon --build-cache --parallel --configure-on-demand
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
