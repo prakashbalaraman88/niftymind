@@ -69,19 +69,23 @@ jobs:
       - name: Install dependencies with pnpm
         run: pnpm install --no-frozen-lockfile
 
-      # Step 9: Run Expo prebuild to generate android/ directory (REQUIRED - CNG project has no android/ dir)
+      # Step 9: Install babel-preset-expo explicitly (REQUIRED - pnpm monorepo cannot resolve transitive deps)
+      - name: Install babel-preset-expo for Metro bundler
+        run: pnpm add -D babel-preset-expo --ignore-workspace-root-check
+
+      # Step 10: Run Expo prebuild to generate android/ directory (REQUIRED - CNG project has no android/ dir)
       - name: Expo prebuild for Android
         run: npx expo prebuild --platform android --no-install
 
-      # Step 10: Make gradlew executable
+      # Step 11: Make gradlew executable
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
-      # Step 11: Build Release APK
+      # Step 12: Build Release APK
       - name: Build Android Release APK
         run: cd android && ./gradlew assembleRelease --no-daemon
 
-      # Step 12: Verify APK output
+      # Step 13: Verify APK output
       - name: Verify APK output
         run: |
           echo "=== Listing APK output ==="
@@ -89,7 +93,7 @@ jobs:
           echo "=== APK file details ==="
           ls -lh android/app/build/outputs/apk/release/*.apk 2>/dev/null || true
 
-      # Step 13: Upload APK artifact with 90-day retention
+      # Step 14: Upload APK artifact with 90-day retention
       - name: Upload Release APK artifact
         uses: actions/upload-artifact@v4
         with:
